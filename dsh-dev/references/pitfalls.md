@@ -137,3 +137,17 @@ pnpm `file:` 安装只按 `package.json` 的 `files` 字段拷贝——`test/` �
 - `profile/pnpm-workspace.yaml` 里 `nodeLinker: hoisted` 时，`file:` 本地插件是**复制进 node_modules（非软链/junction）**，且实测 `pnpm install --force` **不会**重新拷贝文件内容（显示 `Packages: -2` 之类却不变）；改源码必须手动 `cp -r` 或重装。
 - 改用 `"<pkg>": "link:D:/job/.../<dir>"`，pnpm 建成**软链**，源码改动实时生效，无需重装/手动cp。用户已把 media-capture & user-system 切 `link:` 验证通过。
 - 例外：`link:` **不自动装依赖**（见 §2）。若 `link` 包有第三方依赖，需确保其依赖能通过 profile 的 hoisted node_modules 解析，或在该包目录内自行安装。
+
+## 20. 往 DSH 宿主 UI（如左侧栏）注入自定义元素 → 必须镜像宿主项计算样式（2026-08 dsh-user-system 实测）
+
+**现象**：往 DSH 左侧栏注入的自定义菜单项（用户管理 / 退出账号 等）走浏览器默认 `<button>` 样式，与"设置"等宿主项**高度/宽度/内边距/对齐不一致**，偏左、对不齐；只对某一项复制盒模型、别的没有 = **必然错位**；宿主折叠(窄屏 rail)或主题切换后再次错位。
+
+**根因**：DSH 侧边栏是 React 组件，宿主项样式是运行时计算出来的。注入的原生元素若假设默认样式、或硬编码固定值，永远对不齐；且宿主折叠态(rail)、主题切换会动态改宿主盒模型。
+
+**解法**：用一个**统一构建函数** `makeSideItem(id, icon, label, onClick)`：
+1. 找到宿主锚点项（如文本"设置"的可见按钮）；
+2. `getComputedStyle(host)` 读 height/width/padding/box-sizing/display/alignItems/gap/color 等，**克隆到注入项**；
+3. 用 `setInterval`/`ResizeObserver` **动态跟随宿主盒模型**——含窄屏 rail：`justifyContent:center` + `padding:0` + 隐藏文字(span display:none) + `width/height` 实时同步；
+4. 所有注入项走同一函数（不要每项各写一份样式）。
+
+**通用教训**：**往任何第三方宿主 UI 注入元素，不要假设默认样式，要镜像宿主项的计算样式 + 动态适配**——这是"宿主注入"类需求的通用规律。
