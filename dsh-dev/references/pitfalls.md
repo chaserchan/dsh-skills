@@ -347,3 +347,11 @@ modlens config set openai.extraBody '{"max_tokens":8192}'
 
 - `! [remote rejected] main -> main (shallow update not allowed)`：本地 **shallow clone** 推 Gitee 被拒。解法 `git fetch --unshallow origin`（GitHub 慢可后台跑）补全历史再 push；超时被杀会残留 `.git/shallow.lock`，需删除。
 - Gitee 建仓 `POST https://gitee.com/api/v5/user/repos` **恒私有**（`private` 参数无效），`{"name":...,"private":true}` 明确即可；chasechan token 在 Obsidian `个人/账号-代码托管.md`；SSH 推送用 `git@gitee.com:chasechan/<repo>.git`（本机 `id_ed25519` 已绑定 Gitee）。
+
+## 42. OpenDesign od generate 生成的中文在 HTML head/注释乱码（GBK）
+
+**现象**：`od generate` 出的 HTML，`<title>`/head 注释里的 em-dash（—）/中文间隔号（·）显示为 `鈥?`/`鐫＄湢`（GBK 噪声），body 中文正常。
+
+**根因**：od generate（deepseek runtime agent）把 head/注释里的 em-dash（—）/UTF-8 中文以非 UTF-8 编码写入（em-dash 触发编码错乱）。
+
+**解法**：prompt/brief 明确「HTML head/注释避免 em-dash（—）/中文间隔号（·），非 ASCII 只放内容区，正文 UTF-8，注释用 ASCII」；已入 huashu-design `advanced-techniques.md` 交付自查「字符/编码」项。
