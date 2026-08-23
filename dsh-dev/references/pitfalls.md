@@ -192,3 +192,34 @@ DSH webserver 明确 `No TLS, auth`。`gate.js` 之类只做**前端门禁**（�
 - **License 红线（铁门槛）**：`dsh-pocket` 是 **GPL-2.0**；`dsh-plugin-user-system` 是 **MIT 且已发 npm**。把 GPL 代码整合进 MIT 包 → 整个包变 GPL 衍生、必须整体 GPL 开源，已发版本违规。**因许可证不同，不设依赖、不整合代码，只做可选文档记录**（README「推荐搭配插件」纯文字告知装配方式）。
 - **记录进 README 而非功能**：第三方生态关系写进 README 的「推荐搭配插件（可选·非依赖）」小节，明确"本品可单独完整使用 + 该插件为可选加分项 + 叠加关系 + 许可证限制"。不要用 admin 面板显示插件清单（scope creep，违背单职责）。
 **教训**：组合插件时**先看许可证**（GPL/AGPL 传染性强，勿与 MIT/BSD 包整合）；正交的插件用"文档记录 + 叠加"，不要硬揉。
+
+## 29. DSH composer 图片硬限制：宽高必须 ≤2000px（消息发送门禁，2026-08 media-capture 实测）
+
+**现象**：上传图片后 DSH 提示"图片宽高不能超过2000px"，**整条消息发不出**。
+
+**根因**：DSH composer/模型图片输入限制**宽、高均 ≤2000px**；任一超限即拒绝整个提交（不只那张图）。之前只按宽缩放，竖屏长图高度超限仍被拒。
+
+**解法**：提交前**必须自动压缩**：
+```js
+const scale = 2000 / Math.max(w, h);   // 按更长边缩放，宽/高都收敛到 2000px 内
+// 若缩放后文件仍超字节上限（如 4MB），自动降质量重压（0.85→0.4）直到达标
+```
+已合规（宽高≤2000px 且字节不超）的图**原样提交**，不重编码。
+
+**通用教训**：图片类插件必须"**先合规再提交**"，否则超限导致整条消息被拒；且要**按更长边缩放**（不是只压宽）。
+
+## 30. client 插件访问 ctx 服务必须 inject（否则 "without inject" 报错）
+
+**现象**：`cannot get property "sessions" without inject`（跨端运行时错误）。
+
+**解法**：`exports.inject` 声明用到的**服务名**：
+```js
+exports.inject = ["slots", "locale", "settingsScope", "sessions", "conversation"];
+```
+否则访问 `ctx.sessions` / `ctx.conversation` 抛错。另外 `sessions.list` 是 `createSnapshotStore`，读当前会话 id 用 **`sessions.list.getSnapshot().current`**（**不是 `.get()`**）。
+
+## 31. composer 草稿仅支持图片（视频无法直接进附件）
+
+`conversation.createDraftImages` 只收 png/jpeg/webp/gif（`imageMediaType` 校验），**视频会抛错**；`browserDraftAttachment` 的 `kind` 恒为 "image"。所以**原始视频文件没有 host 附件通道**。
+
+**解法**：视频要进 composer 只能**压缩成单张封面图**上传（media-capture 做法：`videoToCompressedImage` 取首帧→按更长边缩到 ≤2000px→JPEG）；如需原始视频，需 host 视频附件能力（当前 DSH 未提供），只能到接口层扩展。
