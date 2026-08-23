@@ -225,3 +225,30 @@ exports.inject = ["slots", "locale", "settingsScope", "sessions", "conversation"
 **解法**：视频要进 composer 只能**压缩成单张封面图**上传（media-capture 早期做法：`videoToCompressedImage` 取首帧→按更长边缩到 ≤2000px→JPEG）；如需原始视频，需 host 视频附件能力（当前 DSH 未提供），只能到接口层扩展。
 
 **方案修订（过期修正，2026-08）**：media-capture 最初把视频压成封面图，但用户真实预期是"视频原样发出去"，而 DSH 无视频通道、做不到 → **最终决定：移除视频，只保留图片**（上传面板 `accept="image/*"`，无 `video/*`；删掉 `videoToCompressedImage`/`isVideoType`/`VIDEO_TYPES`）。教训：**"视频怎么处理"是用户决策，不是技术默认**——平台无通道时先问用户"要封面图/要多帧/还是移除视频"，别自作主张压封面。这也说明 DSH 生态：**附件 = 图片专用**，任何视频都进不了 composer（与上一节 §29 的门禁同源）。
+
+## 32. 契约测试断言方向 & 文档脱节（2026-08 media-capture 收尾核对实测）
+
+背景：把 media-capture 从"拍照/拍视频/上传"收敛到"只保留图片"后，用户要求核对。**功能代码本身没问题，但核对揪出文档/测试与实现严重脱节**，其中一处是**测试断言方向整个反了**。
+
+### 32a. client 插件契约测试断言方向：要断言"不导出 name"，不是"有 name"
+
+**现象**：`node test/smoke.mjs` 报 `❌ client.name 等于 dsh-media-capture` 和 `❌ host name 等于 dsh-media-capture`（2 项失败）。
+
+**根因**：smoke.mjs 按"直觉"断言 `client.name === "dsh-media-capture"`，但 **DSH client/host 插件契约恰恰是不导出 `name`**（导出 name 会被 cordis `internal/plugin` 判 `disabled`，进不了浏览器 graph）。这个测试写反了契约方向。
+
+**解法**：冒烟测试断言**反面**——`check(!client.name, ...)`、`check(!dshMod.name, ...)`，并补 `client.inject 不含 apply/name`。修正后 ALL PASS。
+
+**通用教训**：DSH 插件契约测试**不要凭直觉写"应该有 name"**，要按实际契约（`exports` 只有 `apply` + `inject`；host 只有 `apply`）写**否定断言**。这一条被 media-capture 踩坑结论（id≠name、不导出 name）反向验证了两次。
+
+### 32b. 收敛功能后，文档/元数据/注释必须同步
+
+**现象**：功能已"只保留图片"，但排查时 `grep video|拍视频|上传视频|抽帧|detectDevice` 仍命中大量残留：
+- `README.md` 整篇还描述**已删除**的拍照/拍视频/抽帧策略/`detectDevice` 三端/`劫持＋按钮`/`file:` 安装；
+- `package.json` `description` 残留"拍照 / 拍视频 / 上传视频…视频抽帧成图"、`keywords` 有 `"video"`；
+- `cordis.patch.yml` 注释还写 `hijacks the composer's "＋" button`（实际早改用官方 `conversation.input.left` 槽位）。
+
+**根因**：迭代收敛需求（删功能）时只改了功能代码，**没同步 README / package.json description / 代码注释**，导致对外门面与实现不一致（发布描述会误导、README 让使用者产生错误预期）。
+
+**解法**：改功能后**用一把 grep 确认无残留**（`grep -i "拍视频|上传视频|抽帧|video/|detectDevice"`），并同步更新：package.json `description`+`keywords`、README 整篇、`cordis.patch.yml` 顶部注释。README 是门面，应重写为准确版本（能力/压缩策略/实现方式/安装/文件结构/踩坑）。
+
+**通用教训**：**删功能 ≠ 只删功能代码**。收敛/移除功能时，文档（README）、元数据（description/keywords）、架构注释（cordis.patch 顶部）必须一起改，否则"核对"时门面全露馅。对照清单：description / keywords / README 能力表 / 功能注释 / 安装说明 / 测试断言。
