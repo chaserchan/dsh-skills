@@ -222,4 +222,6 @@ exports.inject = ["slots", "locale", "settingsScope", "sessions", "conversation"
 
 `conversation.createDraftImages` 只收 png/jpeg/webp/gif（`imageMediaType` 校验），**视频会抛错**；`browserDraftAttachment` 的 `kind` 恒为 "image"。所以**原始视频文件没有 host 附件通道**。
 
-**解法**：视频要进 composer 只能**压缩成单张封面图**上传（media-capture 做法：`videoToCompressedImage` 取首帧→按更长边缩到 ≤2000px→JPEG）；如需原始视频，需 host 视频附件能力（当前 DSH 未提供），只能到接口层扩展。
+**解法**：视频要进 composer 只能**压缩成单张封面图**上传（media-capture 早期做法：`videoToCompressedImage` 取首帧→按更长边缩到 ≤2000px→JPEG）；如需原始视频，需 host 视频附件能力（当前 DSH 未提供），只能到接口层扩展。
+
+**方案修订（过期修正，2026-08）**：media-capture 最初把视频压成封面图，但用户真实预期是"视频原样发出去"，而 DSH 无视频通道、做不到 → **最终决定：移除视频，只保留图片**（上传面板 `accept="image/*"`，无 `video/*`；删掉 `videoToCompressedImage`/`isVideoType`/`VIDEO_TYPES`）。教训：**"视频怎么处理"是用户决策，不是技术默认**——平台无通道时先问用户"要封面图/要多帧/还是移除视频"，别自作主张压封面。这也说明 DSH 生态：**附件 = 图片专用**，任何视频都进不了 composer（与上一节 §29 的门禁同源）。
