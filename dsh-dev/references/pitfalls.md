@@ -122,3 +122,18 @@ DSH 插件"界面不出现"要分三段排查，每段现象与根因不同：
 ## 18. `file:` 依赖不复制 `test/`，且 smoke.mjs mock 缺 `inject`
 
 pnpm `file:` 安装只按 `package.json` 的 `files` 字段拷贝——`test/` 常不在 node_modules 副本里，`test/smoke.mjs` 在 node_modules 内跑会 `MODULE_NOT_FOUND`。且该 smoke mock `ctx` 无 `inject(["webServer"])` 方法，`enabled:true` 分支抛 `ctx.inject is not a function`（**既有问题，非新代码引入**）。判定后端改动是否破坏导入：跑 `apply(enabled:false)`（打印 OK 即 import/config 无误），逻辑层用 `node` 直接单测 store.js。
+
+## 19. 改包名/加 bundle 必须重装 → `cannot resolve profile bundle`；本地插件用 `link:`（2026-08 dsh-user-system 改名实测）
+
+**现象**：改了插件 `package.json` 的 `name`（`dsh-user-system` → `dsh-plugin-user-system`）+ profile 依赖 key + bundle 名后，`dsh web` 报 `cannot resolve profile bundle "dsh-plugin-user-system"`。
+
+**根因**：**改包名 ≠ 重装**。`node_modules/` 里还是旧目录名 `dsh-user-system`，pnpm `dsh.profile.bundles` 解析新包名找不到目录 → 报错。改名后目录名/内容都要重新物化（+1 -3 重建）。
+
+**两类成因**（`cannot resolve profile bundle "X"`）：
+1. `bundles` 数组加了 X，但 `dependencies` 没 X 条目 / 源码目录没建 → 移除幽灵 bundle 或补齐依赖；
+2. 改了 `package.json` `name`，但没重装 → `pnpm install` 重装即可（会重建 `node_modules/<新名>`）。
+
+**关键：本地插件一律用 `link:`，不用 `file:`**。
+- `profile/pnpm-workspace.yaml` 里 `nodeLinker: hoisted` 时，`file:` 本地插件是**复制进 node_modules（非软链/junction）**，且实测 `pnpm install --force` **不会**重新拷贝文件内容（显示 `Packages: -2` 之类却不变）；改源码必须手动 `cp -r` 或重装。
+- 改用 `"<pkg>": "link:D:/job/.../<dir>"`，pnpm 建成**软链**，源码改动实时生效，无需重装/手动cp。用户已把 media-capture & user-system 切 `link:` 验证通过。
+- 例外：`link:` **不自动装依赖**（见 §2）。若 `link` 包有第三方依赖，需确保其依赖能通过 profile 的 hoisted node_modules 解析，或在该包目录内自行安装。
