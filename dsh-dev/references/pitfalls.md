@@ -1,21 +1,23 @@
 # DSH 插件开发踩坑库（实战记录，接手勿重复）
 
+> **维护（跨会话）**：任何会话在本机做 DSH 开发时，遇到新坑/新经验，按 `dsh-dev/SKILL.md` 的"经验沉淀契约"**追加到本文件**（已有条目勿删改，只追加），并同步到版本化源 `D:\job\developer\DSH\skills\dsh-dev\references\pitfalls.md` 后提交推送 dsh-skills 仓库（Gitee + GitHub）。动手前先通读本文件，已记录的坑不要重复试。
+
 > 每条都是本机实测踩过的坑，含根因与解法。新坑请追加到这里并同步进 dsh-skills 仓库。
 
-## 1. `file:` 本地依赖 + `dsh.client` 双面组合 → cordis auto-disable（高危，典型案例）
+## 1. 插件"莫名 404 / 被禁" → 先查 dshmarket 停用名单（真根因，2026-08-23 插桩证实）
 
-**现象**：`dsh-media-capture` 的 client 端 `/plugins/<id>/client.js` 恒 404、`__DSH_BOOT__` 没有它；host 能被加载（`--dump-config` 有 entry）。
+**现象**：`dsh-media-capture` 的 client 端 `/plugins/<id>/client.js` 恒 404、`__DSH_BOOT__` 没有它；host 能被加载（`--dump-config` 有 entry）；浏览器无 icon、无 console 报错。
 
-**诊断证据**（cordis 运行时注入）：
-```
-global-prompt:   fiber=true disabled=false（稳定 enabled，进 graph）✅
-media-capture:   首次 fiber=true disabled=false（进 graph）→ 之后 disabled=true（被 auto-disable）❌
-```
-根因：cordis `internal/plugin` 机制——`fiber.parent.fiber?.entry !== fiber.entry`（`parentMatch=false`）时判定"脱管"，标记 `disabled` 并移出 graph。
+**真根因**：**dshmarket（第三方插件市场）的持久化停用名单**里有该插件。
 
-**已试 9 项全部无效**（勿重复）：id≠name、host 加/去 inject、`ctx.inject`、去 `ctx.logger`、`immediately:true`、`file:` tarball、手动标准包、移出 bundles、patch id≠name。
+- 文件：`$DSH_HOME\profiles\web\.dsh-market\state.json`，原值 `{"disabled":["dsh-media-capture"],...}`；
+- 机制（`dshmarket/lib/routes.js`）：启动时重放 `disabled` 名单 → `setEntryDisabled(name,true)` → `Entry.update` 销毁 fiber → 出 graph → client 404；并挂 `internal/plugin` **自愈守卫**，任何复活尝试都会被再次禁用；
+- 插桩铁证：`Entry.update ← dshmarket/lib/themes.js setEntryDisabled ← routes.js`（此前 9 种改法全无效的原因就是被它按回去）；
+- **解法**：`state.json` 的 `disabled` 置空（`{"disabled":[],...}`），插件代码零改动，重启即恢复。
 
-**对策**：不要逐字段碰运气。**整体复制已知能进 graph 的模板**（`dsh-plugin-global-prompt` 工程形态）再替换功能；或走 registry 发布形态。
+**次要诊断**（旧结论，保留备查）：cordis `internal/plugin` 的 `parentMatch=false` auto-disable 是**表象**（fiber 被 dshmarket 销毁时的附带事件），不是根因；`file:` 本地 + `dsh.client` 双面组合本身可正常工作（media-capture 现以 `link:` 形态稳定进 graph）。
+
+**排查顺序**：DSH 插件 404/被禁 → ① 先查 `.dsh-market/state.json` 的 `disabled` 名单；② 再查 cordis loader 内部。**不要**先逐字段改插件。
 
 ## 2. `dsh plugin add <目录>`（link 安装）不自动装依赖
 

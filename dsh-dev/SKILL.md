@@ -112,6 +112,22 @@ npm（显式 `--registry=https://registry.npmjs.org/`，bypass-2FA GAT）+ Gitee
 4. 敏感文件检查（.env/密钥/内网地址）？
 5. 未改官方包、未破坏既有插件？
 
+## 经验沉淀契约（跨会话共享，必读）
+
+本技能是**共享资产**：激活副本在 `~/.agents/skills/dsh-dev/`，版本化源在 `D:\job\developer\DSH\skills\dsh-dev/`（dsh-skills 仓库，Gitee + GitHub 同步）。任何会话在本机做 DSH 开发时，遇到以下情况**必须沉淀**，不许只在当前会话里提一嘴：
+
+- **新踩的坑**：现象、根因（含诊断证据）、解法、已试无效项——追加到 `references/pitfalls.md`，按既有条目格式；
+- **模板/模式修正**：`references/templates.md`、`architecture.md` 中已过期或不完整的部分；
+- **官方文档/源码新发现**：新的机制、扩展点、装载规则。
+
+沉淀动作（三步，缺一不可）：
+
+1. 追加/修订激活副本 `~/.agents/skills/dsh-dev/references/*`；
+2. **同步**到版本化源 `D:\job\developer\DSH\skills\dsh-dev/`（保持两边一致）；
+3. 按 `git-commit` 技能规范提交推送 dsh-skills 仓库（Gitee + GitHub 双远端回执）。
+
+> 效果：所有会话下次加载 dsh-dev 时就带着最新经验；已记录的坑，后续会话先读再动手，不再重复踩。
+
 ## 参考资料
 
 - [references/architecture.md](references/architecture.md) —— 官方架构、功能→机制映射、本机安装结构速查
