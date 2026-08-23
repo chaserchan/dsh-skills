@@ -1,0 +1,23 @@
+{
+  "skill_name": "readme-author",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我重写 dsh-plugin-global-prompt 的 README。这是一个 DSH（DeepSeek Harness）插件：在「设置 → 通用设置」新增多行输入框配置全局 Prompt，注入每次对话的系统提示词（含子代理），保存即生效、留空即停用，上限 20000 字符。已发布到 npm（dsh-plugin-global-prompt@0.1.0），代码在 Gitee（chasechan/dsh-plugin-global-prompt）和 GitHub（chaserchan/dsh-plugin-global-prompt）。安装方式：dsh plugin --profile web add dsh-plugin-global-prompt，然后在 $DSH_HOME/profiles/web/cordis.patch.yml 追加 - insert: [{id: global-prompt, name: 'dsh-plugin-global-prompt'}]，重启 dsh web。要求：写得高级、像顶级开源项目，读者 30 秒能明白是什么、为什么用、怎么装。当前 README 在 D:\\job\\developer\\DSH\\plugin\\global-prompt\\README.md",
+      "expected_output": "重写后的 README：首屏有徽章+tagline+安装+快速开始；结构按 DSH 插件模板；无空话；License 链接指向真实 LICENSE",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "给我写一个 CLI 工具的 README。工具叫 pngsort：按图片像素内容相似度自动重命名排序 PNG 文件（按行扫描直方图分桶）。npm 安装：npm install -g pngsort。用法：pngsort ./photos --order=light-to-dark。特性：无第三方运行时依赖、批量处理 10000+ 文件不卡、支持 glob 匹配、dry-run 预览。已有 GitHub CI（pnpm test）。",
+      "expected_output": "CLI 工具 README：安装/快速开始/GIF 演示位/命令参考表/FAQ；tagline 一句说清类别+差异；无空话",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "这个 README 太平庸了，帮我改高级点：『# my-lib\\n\\n这是一个强大的库，可以帮助你完成各种任务，非常方便好用。\\n\\n## 安装\\n\\nnpm install my-lib\\n\\n## 使用\\n\\nconst x = require(\"my-lib\") 然后调用就行。\\n\\n## 特性\\n\\n- 强大\\n- 好用\\n- 快速\\n\\n## 贡献\\n\\n欢迎提交 PR。』",
+      "expected_output": "重写后：有明确 tagline（类别+差异）、真实可运行示例、benefit 化特性、结构完整；消除空话与占位",
+      "files": []
+    }
+  ]
+}

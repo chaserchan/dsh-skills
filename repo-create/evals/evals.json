@@ -1,0 +1,23 @@
+{
+  "skill_name": "repo-create",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我把 D:\\job\\developer\\DSH\\plugin\\global-prompt 这个插件仓库推到 GitHub 上（新仓库）。目录里有 lib/index.js、lib/client.js、README.md、LICENSE（MIT）、package.json，没有密钥。",
+      "expected_output": "先评估内容（可公开）→ 友好询问并推荐公开 → 用户确认后以 private:false 创建并推送；复核权限",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "给我建个仓库放我本地这个项目，里面有 .env（存了数据库密码）和 config/internal.yaml（公司内网地址），代码还没写完。",
+      "expected_output": "识别敏感信号（.env 密码、内网地址）→ 推荐私有并点名信号 → 询问确认后再创建；建议敏感文件入 .gitignore",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "我做了个小工具想开源分享，帮我推到 gitee 建个仓库。里面就是几个 py 脚本和 README，没什么敏感的。",
+      "expected_output": "评估为可公开 → 一句话推荐公开并询问 → 确认后以 private:false 建仓推送；附带 LICENSE/README 缺项检查",
+      "files": []
+    }
+  ]
+}
