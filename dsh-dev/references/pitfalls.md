@@ -88,3 +88,29 @@ DSH 插件"界面不出现"要分三段排查，每段现象与根因不同：
 ## 14. 客户端 UI 排障法（无头浏览器不可用时）
 
 无 gstack browse/无浏览器工具时，用**可观测修复**：在 client 的 apply 入口、槽位挂载点、事件处理加 `console.log("[tag] ...")`，让用户硬刷新后回传 Console。三步定位：`apply running`（激活？）→ `xxx mounted`（挂载？）→ 交互日志（逻辑？）。诊断日志在定位后保留（`[dmc]` 前缀）或删除均可。
+
+## 15. DSH 会话 token 只存内存 → 重启后全员被迫重登（真根因，2026-08 dsh-user-system 实测）
+
+**现象**：用户登录后，每次重新打开页面（尤其移动端）都要重新登录；"cookie 明明没到期"。
+
+**真根因**：`store.js` 的 `sessions = new Map()` 是**进程态**——DSH 被 watchdog 重启/崩溃轮或任何进程重启，**全部会话清空**（cookie 在浏览器里 8h 未失效，但服务端已查无此 session → `/session` 返回未认证 → 强制登录）。
+
+**解法**：会话落盘。token 以 `sha256(token)` 作 Map 键（不存明文），`createSession`/`revokeToken` 立即 `persist()`，`load()` 用 `restoreSessions()` 恢复并过滤过期/已删除/禁用用户。验证：reload 后 `validateToken` 仍有效。cookie `SameSite=Strict→Lax`（移动端/反代更稳）。
+
+## 16. 移动端窄表格 + `.cards` 基础规则写在 `@media` 之后 → 卡片被盖掉（实测踩两次）
+
+**现象**：移动端（375px）管理面板"用户与权限"表格 520px 超出视口，靠容器内 `overflow-x:auto` 滚动；移动端滚动条常隐藏，用户觉得"宽度有问题/坏了"。改成卡片堆叠后，卡片仍空白。
+
+**根因**：
+- 桌面表格在窄屏用 `overflow-x:auto` 内滚，属"能滚但看不出"，体验差；
+- 加移动端卡片后，`.${uid}cards{display:none}`（桌面隐藏）如果写在 `@media` **之后**，与 `@media` 里的 `display:block` **同级优先级、后来居上** → 移动端也被 `display:none` 盖掉 → 表格+卡片双双隐藏 → 整块空白。**残留两个 `.cards{display:none}` 更是必踩。**
+
+**解法**：桌面表格 + 移动端卡片**双视图**（`renderUsers` 同时输出 `.desk`(表格) 和 `.cards`(卡片容器)）；`@media(max-width:720px)` 里 `.desk{display:none}` + `.cards{display:block}`；**基础的 `.cards{display:none}` 必须写在 `@media` 之前**。改完用 Playwright 在 375px 实测 `overflowX===0` + DOM `display` 断言。
+
+## 17. 登录/品牌 icon 用用户提供的 SVG + `flex:none`
+
+给 logo 行（flex 容器）内联 SVG 必须带 `style="flex:none"`（否则在 flex 里被拉伸/变形）；SVG 用 `fill="currentColor"` 才能跟随 DSH 主题变量。用户给出成品 SVG 时**原样替换**，不要重画。
+
+## 18. `file:` 依赖不复制 `test/`，且 smoke.mjs mock 缺 `inject`
+
+pnpm `file:` 安装只按 `package.json` 的 `files` 字段拷贝——`test/` 常不在 node_modules 副本里，`test/smoke.mjs` 在 node_modules 内跑会 `MODULE_NOT_FOUND`。且该 smoke mock `ctx` 无 `inject(["webServer"])` 方法，`enabled:true` 分支抛 `ctx.inject is not a function`（**既有问题，非新代码引入**）。判定后端改动是否破坏导入：跑 `apply(enabled:false)`（打印 OK 即 import/config 无误），逻辑层用 `node` 直接单测 store.js。
