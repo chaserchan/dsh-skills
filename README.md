@@ -20,13 +20,16 @@
 | [`readme-author`](readme-author/SKILL.md) | 编写/重写高质量 README（门面即漏斗：首屏法则、四步法、删段测试、QA 清单） | 写 README、"README 不高級/帮我改改/参考大项目怎么写" |
 | [`repo-license`](repo-license/SKILL.md) | 为仓库选对开源许可证并生成正确 LICENSE（决策树 + 官方全文 + 版权人规范） | 建仓缺 LICENSE、"该用什么协议"、"MIT 还是 GPL" |
 | [`repo-create`](repo-create/SKILL.md) | 建仓前按内容评估可见性并友好询问，创建后复核权限 + 落盘三件套自查 | 创建仓库/建仓/"公开还是私有"/"推到远端" |
+| [`obsidian-bases`](obsidian-bases/SKILL.md) | 创建/编辑 Obsidian Bases（.base 文件：视图、过滤器、公式、汇总） | "Obsidian 的 .base 文件 / 数据库视图 / 表格视图 / filters / formulas" |
+| [`obsidian-cli`](obsidian-cli/SKILL.md) | 通过 Obsidian CLI 操作 vault（读写笔记、搜索、任务、属性），支持插件/主题开发调试 | "操作 Obsidian vault / 命令行管理笔记 / 开发调试 Obsidian 插件" |
+| [`obsidian-markdown`](obsidian-markdown/SKILL.md) | 创建/编辑 Obsidian Flavored Markdown（wikilink、embed、callout、properties） | "写 Obsidian 笔记 / wikilinks / callouts / frontmatter / tags" |
 
 ## 安装
 
 把需要的技能目录复制到技能目录（如 `~/.agents/skills/` 或 DSH 技能目录）：
 
 ```sh
-cp -r dsh-dev git-commit readme-author repo-license repo-create ~/.agents/skills/
+cp -r dsh-dev git-commit readme-author repo-license repo-create obsidian-bases obsidian-cli obsidian-markdown ~/.agents/skills/
 ```
 
 技能即装即用，重启会话后由技能目录自动发现。
@@ -40,6 +43,9 @@ dsh-skills/
 ├── readme-author/     # README 门面工程（SKILL.md + references + evals）
 ├── repo-license/      # 开源许可证落地（SKILL.md + references）
 ├── repo-create/       # 建仓规范：权限先问（SKILL.md + references + evals）
+├── obsidian-bases/    # Obsidian Bases（SKILL.md + references）
+├── obsidian-cli/      # Obsidian CLI（SKILL.md）
+├── obsidian-markdown/ # Obsidian Flavored Markdown（SKILL.md + references）
 ├── LICENSE            # MIT
 └── README.md
 ```
