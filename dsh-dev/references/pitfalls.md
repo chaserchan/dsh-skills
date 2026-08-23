@@ -301,3 +301,49 @@ modlens config set openai.extraBody '{"max_tokens":8192}'
 **根因**：shell 层 TLS 栈/安全包问题，**不是网络不通**——别信 curl/IWR 的失败结论判定"机器出不了网"。
 
 **解法**：需要联网验证时优先用 node：`node -e "fetch(...)"` 或直接跑对应工具的 node CLI。判定网络问题前先做个 node 对照实验。
+
+## 36. OpenDesign daemon 端口：od 默认 7456，但 tools-dev 实际 7457（`OD_DAEMON_URL` 更正）
+
+**现象**：`od lint <file>` / `od research` 等直连报 `failed to reach daemon at http://127.0.0.1:7456: ECONNREFUSED`，但 daemon 明明在跑（web 3000 可用）。
+
+**根因**：`od` CLI（`apps/daemon/bin/od.mjs` → `dist/cli.js`）**默认连 `7456`**；而 `tools-dev run web --daemon-port 7457 --web-port 3000` 起的 daemon 在 **7457**。
+
+**解法**：`$env:OD_DAEMON_URL='http://127.0.0.1:7457'`。
+
+**附**：OpenDesign 数据根在 `%APPDATA%\Open Design\namespaces\default\data`（`app.sqlite` + `projects/<id>/` + `design-systems/<slug>/`），**不是** `D:\job\OpenDesign`。
+
+## 37. OpenDesign design-system 的"发布"流程（body 才真实、目录是陈旧模板）
+
+- run 生成的设计体系内容在**项目** `projects/<id>/DESIGN.md`（完整）；design-system 记录 `user:*` 的 `body` 字段从项目 workspace 的 `DESIGN.md` 读取。
+- **发布** = `PATCH /api/design-systems/:id`，`body={"status":"published"}`；`status` 仅 `'draft'|'published'`（`DesignSystemStatus`）。
+- **大坑**：`design-systems/<slug>/DESIGN.md` 可能是**陈旧占位模板**（只有 `# Title` + 各节 "List ..." 指令），而 API 返回的 `body` 才是真实内容。**判断内容看 `GET /api/design-systems/:id` 的 `body`，不要看目录文件**。
+
+## 38. OpenDesign design-systems 目录按 workspace 隔离（"你的体系=0" 真根因）
+
+**现象**：Web「你的体系」= 0，尽管 personal design-system 存在（`GET /api/design-systems` 无 header 能查到 153 个，含它）。
+
+**根因**：`listAllDesignSystems`（`apps/daemon/src/design-systems/server-services.ts` L432-457）**按 workspace 隔离**：请求一旦带 `x-od-workspace-id` header，**personal（无 workspace 绑定）体系会被 `return false` 隐藏**。
+
+**实证**：无 header → 153（含 personal）；带 workspace header → 152（personal 被过滤）。
+
+**解法**（要让体系出现在某 workspace「你的体系」）：
+1. 在该 workspace 下 `POST /api/design-systems`（带 `x-od-workspace-id` + `x-od-workspace-member-id` header，body 用 `title/category/surface/summary/body/status`）重建——用现有体系的 `body` 即可，不用重新生成；
+2. 或用 `/design-systems/create`（setup 入口，新建项目工作区再生成）；
+3. 切回个人（无 workspace）视图则 personal 体系可见。
+
+**取 workspace/成员 id**：`app.sqlite` 的 `workspace_projects` 表（`workspace_id` + `created_by_workspace_member_id`，形如 `z25c001...`/`zgk...`）。
+
+## 39. OpenDesign 新增 od 命令需 build 才进 dist
+
+`od generate/rename/delete` 等加在 `apps/daemon/src/cli.ts`（源码）；`od.mjs` 实际加载 `../dist/cli.js`（**编译产物**）。**必须** `pnpm --filter @open-design/daemon build`（或 bootstrap）后 `dist/cli.js` 才含新命令，否则 `od --help` 看不到（`git` 只提交 `src` 改动，`dist` 是构建产物）。
+
+## 40. OpenDesign 原型状态完备（用户硬性要求）+ `od lint` 校验
+
+高保真原型**必须**含：懒加载 / 加载（骨架+spinner）/ 空 / 错误 / 过渡动画 + `prefers-reduced-motion`，且错误态别用 `--danger` 闪警（睡眠设备离线要用中性提示，符合 DESIGN §10.1）。
+
+校验：`od lint <file> --fail-on none`（要先 `OD_DAEMON_URL` 连对 7457）→ `clean — 0 findings (P0/P1/P2)` 为通过。
+
+## 41. Gitee push shallow 仓库被拒 + 建仓恒私有
+
+- `! [remote rejected] main -> main (shallow update not allowed)`：本地 **shallow clone** 推 Gitee 被拒。解法 `git fetch --unshallow origin`（GitHub 慢可后台跑）补全历史再 push；超时被杀会残留 `.git/shallow.lock`，需删除。
+- Gitee 建仓 `POST https://gitee.com/api/v5/user/repos` **恒私有**（`private` 参数无效），`{"name":...,"private":true}` 明确即可；chasechan token 在 Obsidian `个人/账号-代码托管.md`；SSH 推送用 `git@gitee.com:chasechan/<repo>.git`（本机 `id_ed25519` 已绑定 Gitee）。
