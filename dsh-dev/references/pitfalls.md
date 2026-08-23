@@ -184,3 +184,11 @@ DSH webserver 明确 `No TLS, auth`。`gate.js` 之类只做**前端门禁**（�
 - **主解**：给注入的 `<input>`/`<select>` 显式 `font-size:16px`（覆盖继承的 14px）——可靠、live、不牺牲 pinch-zoom 无障碍。DSH 注入 UI 常用 `font:inherit`→14px，必踩。
 - **补强**：服务端 `tapIndex` 把 viewport 强化为 `width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no`（需重启）；代价是**禁用整页 pinch-zoom**，如不需要可只留 `maximum-scale=1`。
 - 验证：Playwright `getComputedStyle(input).fontSize` === "16px"（375px 移动端视口）。
+
+## 28. 第三方插件生态组合：正交分层 + GPL/MIT 许可证红线（2026-08 dsh-pocket 案例）
+**场景**：想在一个 DSH 插件里"整合或记录"另一个第三方插件（如把 `dsh-pocket` 手机远程接入编进 `dsh-plugin-user-system`）。
+**判断**：
+- **职责正交的就"叠加/记录"，不要"整合"**。`dsh-pocket`（手机远程接入/反向代理/cloudflared 隧道）+ `dsh-user-system`（登录门禁/RBAC/共享策略）正交 → **分层叠加成双认证**（先 dsh-pocket 8 位访问密码 → DSH → user-system 账号登录），两者独立、各自升级。
+- **License 红线（铁门槛）**：`dsh-pocket` 是 **GPL-2.0**；`dsh-plugin-user-system` 是 **MIT 且已发 npm**。把 GPL 代码整合进 MIT 包 → 整个包变 GPL 衍生、必须整体 GPL 开源，已发版本违规。**因许可证不同，不设依赖、不整合代码，只做可选文档记录**（README「推荐搭配插件」纯文字告知装配方式）。
+- **记录进 README 而非功能**：第三方生态关系写进 README 的「推荐搭配插件（可选·非依赖）」小节，明确"本品可单独完整使用 + 该插件为可选加分项 + 叠加关系 + 许可证限制"。不要用 admin 面板显示插件清单（scope creep，违背单职责）。
+**教训**：组合插件时**先看许可证**（GPL/AGPL 传染性强，勿与 MIT/BSD 包整合）；正交的插件用"文档记录 + 叠加"，不要硬揉。
