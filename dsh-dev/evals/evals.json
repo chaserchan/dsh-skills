@@ -1,0 +1,23 @@
+{
+  "skill_name": "dsh-dev",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我给 DSH 做一个新插件：在设置 → 通用设置加一栏输入框（全局 Prompt），内容注入每次对话的系统提示词。参考已有的 dsh-plugin-global-prompt 工程形态（D:\\job\\developer\\DSH\\plugin\\global-prompt）。",
+      "expected_output": "按双半区工程形态搭好包（package.json 含 dsh.client+dsh.bundle、lib/index.js host 用 ctx.inject、lib/client.js 是 __ModuleLoader__ bundle），给出装载与验证步骤（--dump-config / probe / /plugins 200）",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "我的 DSH 插件装上了但前端不显示，/plugins/dsh-media-capture/client.js 返回 404，__DSH_BOOT__ 里没有它。这是为什么？怎么排查？",
+      "expected_output": "定位到 client 端进不了 graph（loader entry 未稳定 enabled / cordis parentMatch auto-disable），给出对照已知模板（global-prompt）整体复制的对策，并用 --dump-config + 独立 probe 验证；不重复 9 种无效改法",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "要把插件发布到 npm 和 Gitee/GitHub，还要让 dshmarket 市场显示中文描述，该怎么做？",
+      "expected_output": "给出 npm 发布（--registry 官方源 + bypass-2FA GAT）、双仓库推送（Gitee SSH/HTTPS、GitHub HTTPS store）、dshmarket 上架（data/plugins YAML + dsh.bundle/1天/10 commits/topic 要求）完整流程",
+      "files": []
+    }
+  ]
+}
