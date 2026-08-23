@@ -120,13 +120,15 @@ npm（显式 `--registry=https://registry.npmjs.org/`，bypass-2FA GAT）+ Gitee
 - **模板/模式修正**：`references/templates.md`、`architecture.md` 中已过期或不完整的部分；
 - **官方文档/源码新发现**：新的机制、扩展点、装载规则。
 
-沉淀动作（三步，缺一不可）：
+沉淀动作（三步，缺一不可；**未推送视为未完成**）：
 
 1. 追加/修订激活副本 `~/.agents/skills/dsh-dev/references/*`；
 2. **同步**到版本化源 `D:\job\developer\DSH\skills\dsh-dev/`（保持两边一致）；
-3. 按 `git-commit` 技能规范提交推送 dsh-skills 仓库（Gitee + GitHub 双远端回执）。
+3. 按 `git-commit` 技能规范提交推送 dsh-skills 仓库（Gitee + GitHub 双远端），并在**回复中给出推送回执**：commit hash + 双远端 `ls-remote` HEAD——没有回执 = 沉淀未完成，需要补做。
 
-> 效果：所有会话下次加载 dsh-dev 时就带着最新经验；已记录的坑，后续会话先读再动手，不再重复踩。
+**加载时一致性检查**：使用本技能前，先比对激活副本与版本化源（如 `~/.agents/skills/dsh-dev/references/pitfalls.md` 与 `D:\job\developer\DSH\skills\dsh-dev\references\pitfalls.md`）；不一致时**先同步再继续**，并在回复中说明同步了什么。这保证任何会话读到的都是最新经验。
+
+> 效果：所有会话下次加载 dsh-dev 时就带着最新经验；已记录的坑，后续会话先读再动手，不再重复踩。git 仓库永远比本地活跃副本新（或至少一致）。
 
 ## 参考资料
 
