@@ -252,3 +252,52 @@ exports.inject = ["slots", "locale", "settingsScope", "sessions", "conversation"
 **解法**：改功能后**用一把 grep 确认无残留**（`grep -i "拍视频|上传视频|抽帧|video/|detectDevice"`），并同步更新：package.json `description`+`keywords`、README 整篇、`cordis.patch.yml` 顶部注释。README 是门面，应重写为准确版本（能力/压缩策略/实现方式/安装/文件结构/踩坑）。
 
 **通用教训**：**删功能 ≠ 只删功能代码**。收敛/移除功能时，文档（README）、元数据（description/keywords）、架构注释（cordis.patch 顶部）必须一起改，否则"核对"时门面全露馅。对照清单：description / keywords / README 能力表 / 功能注释 / 安装说明 / 测试断言。
+
+## 33. 智谱 GLM Coding Plan 接入 DSH：glm-5.3 是纯文本模型，三连坑（2026-08-23 实战）
+
+**场景**：把智谱 Coding Plan key 配成 DSH LLM provider（`llm-pi-ai.providers.zhipu`，baseURL `https://open.bigmodel.cn/api/coding/paas/v4`，模型 glm-5.3）。
+
+### 33a. 贴图报 400 `code:1210 messages.content.type 参数非法，取值范围 ['text']`
+
+**根因**：**glm-5.3 在智谱端点就是纯文本模型**（端点硬限制，与 DSH 配置无关）。给模型声明 `input:[text,image]` 只会让图片真发出去然后被端点拒——DSH 文档明说 `input` 是"声明不是检查"。
+
+### 33b. 撤回 input 声明后报 `model-unavailable: session already contains images`
+
+**根因**：**会话日志保留真实图片块**（曾在 input 声明生效期间贴过图），纯文本模型回放历史即整会话锁死，每条消息都报错。
+
+**解法**：① 会话内救活：切到 `(modlens vision)` 孪生条目（请求时把历史图片转证据文本）；② 最干净：新开会话先选好模型再贴图。
+
+**正确姿势**：glm-5.3 保持无 input 声明（默认 text-only）；看图一律走 modlens 桥（孪生条目或贴图自动落路径由 `modlens_read_image` 读）。
+
+**key 存放规范**：secret 写 `~/.dsh/.credentials.yaml` 的 `refs`（如 `ZHIPU_API_KEY`），`settings.yaml` 用 `apiKeyEnv` 引用——DSH 官方推荐 secret 不进配置文件。
+
+### 33c. modlens 自动给新 zhipu 路由挂 `(modlens vision)` 孪生条目
+
+**现象**：模型选择器出现"智谱 GLM (Coding Plan) (modlens vision)"，用户疑惑。
+
+**机制**（modlens `dsh/index.js`）：自动扫描所有 provider 路由，`families=['deepseek','glm']` 且模型未声明 image、id 不匹配视觉正则（`glm-4.5v` 这类带 v 的才是原生视觉）→ 注册包装 twin。**这是设计行为不是配置错误**；声明 image 后孪生条目自动消失。
+
+## 34. modlens 视觉桥引擎：provider 配好 ≠ 被选用；glm-4v-flash 输出上限 1024 装不下证据（2026-08-23 实战）
+
+**现象**：`~/.modlens/config.json` 里 openai 引擎已配好（智谱 key），贴图仍失败或截断。
+
+**根因1**：**引擎选择由 config.json 顶层 `provider` 键决定**（缺省 `antigravity-cli`），providers.openai 配置存在≠会被用。doctor 的 "Selected provider" 段才是真相。
+**根因2**：**glm-4v-flash 输出上限 1024 tokens**（端点硬限制 `[1,1024]`），modlens 结构化证据（summary+全文OCR+布局）装不下 → `finish_reason=length` 截断；设 4096 直接 400。
+
+**解法**（实测通过）：
+```sh
+modlens config set provider openai
+modlens config set openai.model glm-4.1v-thinking-flash   # 免费视觉推理模型，输出 16K
+modlens config set openai.extraBody '{"max_tokens":8192}'
+```
+`glm-4.1v-thinking-flash` 免费、16K 输出、GUI/图表理解强项，正适合读界面截图。
+
+**机制**：dsh 插件**每次贴图临时 spawn CLI 子进程**（无 `-p` 参数），冷读 `~/.modlens/config.json` → **改配置即时生效，无需重启 dsh**。另可用 `MODLENS_DSH_CLI` 环境变量覆盖 CLI 路径。
+
+## 35. 本机 shell 网络出口分裂：curl.exe/Invoke-WebRequest 全挂，但 node fetch 正常（环境坑）
+
+**现象**：pwsh 里 `Invoke-WebRequest`/`curl.exe` 访问任何 HTTPS（连 baidu）都失败：`HTTP:000` / `No credentials are available in the security package`；同机 **node 的 fetch 完全正常**（modlens CLI 直连智谱成功）。
+
+**根因**：shell 层 TLS 栈/安全包问题，**不是网络不通**——别信 curl/IWR 的失败结论判定"机器出不了网"。
+
+**解法**：需要联网验证时优先用 node：`node -e "fetch(...)"` 或直接跑对应工具的 node CLI。判定网络问题前先做个 node 对照实验。
