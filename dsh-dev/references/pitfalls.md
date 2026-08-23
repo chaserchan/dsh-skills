@@ -69,3 +69,22 @@ web 运行期间改 profile（pnpm install 等）可能遇锁文件 EPERM。先�
 ## 12. 系统提示词注入即生效
 
 `systemPrompt.section` 的 `text` 每次模型步进重新求值——设置保存后**下一条回复即生效**（含已有会话），无需重启；空文本段落被渲染器过滤（留空=停用，天然开关）。
+
+## 13. media-capture 完整排障链：装载 → 激活 → 可见（2026-08-23 实战，三段独立问题）
+
+DSH 插件"界面不出现"要分三段排查，每段现象与根因不同：
+
+1. **装载**（client bundle 404、`__DSH_BOOT__` 无）→ 根因是 dshmarket `.dsh-market/state.json` 停用名单（见 §1），**插件代码零改动**；
+2. **激活**（bundle 200、无 console、apply 未跑）→ client bundle **只导出 `apply`+`inject`**（移除 `exports.name`），`inject` 对齐基线模板（`["slots",...]`）；用 console 诊断日志（apply 入口）确认；
+3. **可见**（apply 已跑、无 icon）→ **先确认需求是"新增可见元素"还是"劫持既有元素"**。composer 工具行加按钮要用**官方槽位 `conversation.input.left`**（list/session，渲染在「＋」旁）：
+   ```js
+   ctx.slots.inject("conversation.input.left", () => ctx.slots.register({
+     name: "conversation.input.left", id: "dmc-camera", order: 10,
+   }, () => react.createElement(CameraButton, { setOpen })));
+   ```
+   （dsh-client-ui-plan 注册 `conversation.input.plan` 同款；ui-conversation 在 L7256 `leftItems = renderSlot("conversation.input.left", zone)` 渲染）。
+   **不要用 DOM 劫持「＋」按钮**——它会顶掉斜杠命令菜单，且不新增可见元素（本案例初次"无 icon"的根因）。
+
+## 14. 客户端 UI 排障法（无头浏览器不可用时）
+
+无 gstack browse/无浏览器工具时，用**可观测修复**：在 client 的 apply 入口、槽位挂载点、事件处理加 `console.log("[tag] ...")`，让用户硬刷新后回传 Console。三步定位：`apply running`（激活？）→ `xxx mounted`（挂载？）→ 交互日志（逻辑？）。诊断日志在定位后保留（`[dmc]` 前缀）或删除均可。
