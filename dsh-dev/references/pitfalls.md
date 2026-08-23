@@ -151,3 +151,28 @@ pnpm `file:` 安装只按 `package.json` 的 `files` 字段拷贝——`test/` �
 4. 所有注入项走同一函数（不要每项各写一份样式）。
 
 **通用教训**：**往任何第三方宿主 UI 注入元素，不要假设默认样式，要镜像宿主项的计算样式 + 动态适配**——这是"宿主注入"类需求的通用规律。
+
+## 21. DSH 后端状态在进程内：改落盘数据文件不经重启不生效
+**现象**：改了 `users.json` / store 数据文件（如重置密码），但登录/行为不变。
+**根因**：store 状态在 DSH 进程内存，`persist()` 只写盘不 reload；进程内 store 不会自动读文件。
+**解法**：改后端落盘数据 → **必须重启 DSH**。区分：后端(`app/store/permissions`)改动 → 重启；`serveFile` 提供的前端静态文件(`gate.js`/`login.html`)改动 → **强刷(Ctrl+Shift+R)即可**（serveFile 实时读盘）。
+
+## 22. schemastery 无 `.optional()`；bundle 自动 `insert` 勿重复（duplicate loader entry id）
+- `@deepseek-ai/schemastery` **没有 `.optional()`**——字段默认即可选，可选字符串写 `z.string()`；写 `.optional()` 报 `z.string(...).optional is not a function`。
+- profile 的 `dsh.profile.bundles` 列出的包若声明 `dsh.bundle.patch`，则是 **bundle**，会自动 `insert` 其 patch 的 entry（如 `id: user-system`）。**profile 自己的 `cordis.patch.yml` 想改配置时，必须按 id 覆盖（顶层 `- id: xxx` + config），不能再 `insert` 同 id** → 否则 `duplicate loader entry id: xxx`。非 bundle（只有 `dsh.client.inject`、无 `dsh.bundle.patch`）才需手动 `insert`。
+
+## 23. 注入 DSH Web UI：主题用 `--dsw-alias-*` 勿硬编码 hex；`box-sizing:border-box` 必加；原生 select 美化
+- **主题跟随**：注入的登录/面板/侧边栏用 DSH 主题变量 `--dsw-alias-label-primary/tertiary`、`--dsw-alias-border-l2`、`--dsw-alias-bg-layer-3`、`--dsw-alias-brand-primary` 等，**不要硬编码 `#hex`**（否则 DSH 切白/深主题后 UI 不跟随）。
+- 任何 `width:100%` + `padding` 的元素（输入框/按钮）**必须 `box-sizing:border-box`**，否则内容盒撑破容器溢出。
+- 原生 `<select>` 默认丑：`appearance:none` + 内联 SVG 箭头(background-image) + 主题色边框美化。
+
+## 24. DSH webserver 无后端认证 = 安全边界：前端门禁 ≠ 拦 API
+DSH webserver 明确 `No TLS, auth`。`gate.js` 之类只做**前端门禁**（挡界面）；未登录者写脚本直接调 DSH `/api/*` 仍可读数据。真正的认证必须在 DSH 之前（前置网关/反代），**不要指望前端遮罩能拦 API**。
+
+## 25. Windows/PowerShell 两个常见坑：中文注释乱码、curl.exe 传 JSON 引号失灵
+- UTF-8 无 BOM 的 `.ps1` 被 PowerShell 按 GBK 读 → 中文乱码 → 字符串终结符错乱。**脚本里只用 ASCII**。
+- `curl -d '{"a":1}'` 在 PS 引号失灵；用 `Invoke-WebRequest -Body (@{...}|ConvertTo-Json)` 或 `Invoke-RestMethod`。
+
+## 26. 快捷诊断：Playwright 驱动系统 Edge；Node 单测 store
+- 无 gstack browse 时：`p.chromium.launch(channel="msedge")` 驱动系统 Edge（免下载 chromium），做移动端/登录/面板布局实测 + 截图。
+- Node 侧 store 逻辑：`node --input-type=module -e` 快速单测 `store.js`（`persistMode:"memory"`）。
