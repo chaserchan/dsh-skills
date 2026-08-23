@@ -176,3 +176,11 @@ DSH webserver 明确 `No TLS, auth`。`gate.js` 之类只做**前端门禁**（�
 ## 26. 快捷诊断：Playwright 驱动系统 Edge；Node 单测 store
 - 无 gstack browse 时：`p.chromium.launch(channel="msedge")` 驱动系统 Edge（免下载 chromium），做移动端/登录/面板布局实测 + 截图。
 - Node 侧 store 逻辑：`node --input-type=module -e` 快速单测 `store.js`（`persistMode:"memory"`）。
+
+## 27. 移动端 input 聚焦自动缩放：根因是字号 <16px，`viewport` meta 拦不住（2026-08 dsh-user-system 实测）
+**现象**：手机上点击输入框，页面被放大（iOS/Chrome 的 input-focus 自动缩放）。用户第一反应是"viewport 没生效"。
+**真根因**：`<meta name="viewport" content="width=device-width, initial-scale=1">` **拦不住**这个自动缩放。真正触发条件是**聚焦的 `<input>` 计算字号 < 16px**（浏览器为让输入框可读而自动放大）。只有 `input { font-size:16px }` 或 viewport `user-scalable=no` 能拦。
+**解法**（保留无障碍优先）：
+- **主解**：给注入的 `<input>`/`<select>` 显式 `font-size:16px`（覆盖继承的 14px）——可靠、live、不牺牲 pinch-zoom 无障碍。DSH 注入 UI 常用 `font:inherit`→14px，必踩。
+- **补强**：服务端 `tapIndex` 把 viewport 强化为 `width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no`（需重启）；代价是**禁用整页 pinch-zoom**，如不需要可只留 `maximum-scale=1`。
+- 验证：Playwright `getComputedStyle(input).fontSize` === "16px"（375px 移动端视口）。
