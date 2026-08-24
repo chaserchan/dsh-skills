@@ -355,3 +355,22 @@ modlens config set openai.extraBody '{"max_tokens":8192}'
 **根因**：od generate（deepseek runtime agent）把 head/注释里的 em-dash（—）/UTF-8 中文以非 UTF-8 编码写入（em-dash 触发编码错乱）。
 
 **解法**：prompt/brief 明确「HTML head/注释避免 em-dash（—）/中文间隔号（·），非 ASCII 只放内容区，正文 UTF-8，注释用 ASCII」；已入 huashu-design `advanced-techniques.md` 交付自查「字符/编码」项。
+
+## 43. 贴图"视觉引擎失败"：modlens 3.23.x 剥不出思考模型的 JSON（2026-08-24 实战）
+
+**现象**：往 DSH 贴图，用户侧图片正常内嵌显示，但模型侧报 `A pasted image could not be read: the vision engine failed`。
+
+**根因链（逐环实测）**：
+1. DSH 贴图 → modlens 插件 spawn **包内引擎** `node_modules/@liustack/modlens/dist/main.js`（与全局 PATH 无关）；
+2. glm-4.1v-thinking-flash 是思考型模型，回复把证据 JSON 裹进思考文本（"After careful analysis, here's the final JSON:"）；
+3. **3.23.x/3.24.0 引擎的 JSON 提取器剥不出** → 判定失败；**3.24.1 已修**（同图同模型实测通过）。
+4. 坑中坑：`dsh plugin update --latest` 走 npmmirror 拿到 **3.24.0（还是老解析）**，镜像没同步 3.24.1（§4 复现）→ 必须在 profile 目录显式 `pnpm add @liustack/modlens@3.24.1 --registry=https://registry.npmjs.org`。
+5. `config set openai.structuredOutput true` 无效：智谱端点对思考模型不强制 response_format。
+
+**贴图失败的急救通道（不重试、先恢复）**：
+- 附件本体：`~/.dsh/attachments/v1/objects/<sha256前2位>/<sha256>`（会话日志里 attachmentId 即 sha256）；
+- 日志定位：活跃日志 `~/.dsh/sessions/<workspace>--/session-<uuid>/session.jsonl.zstd`（**挑字节数大的**，几百字节的是存根）；用 profile node_modules 里的 `fzstd` 解压，找 `user/message` 事件的 `attachment` 块拿 sha256；
+- 拷出来直接 `npx @liustack/modlens analyze -i <file>` 或跑插件内引擎读图。
+- 升级引擎后**贴图即生效无需重启**（§34：每次贴图临时 spawn 磁盘上的引擎，冷读）。
+
+**已试无效项**：structuredOutput true（网关不支持）、3.24.0（解析未修）、全局装 modlens CLI（无关——插件 spawn 的是包内引擎）。
