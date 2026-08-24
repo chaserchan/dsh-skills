@@ -63,3 +63,11 @@ pkg/
 - `/plugins/<id>/client.js` 返回 200（浏览器侧已进 graph）；
 - 主页 HTML 的 `window.__DSH_BOOT__` entries 含该 id（带 inject 顺序 + `immediately`）；
 - 设置页/对应槽位出现 UI（GUI 刷新后）。
+
+## 六、机制新发现：SPA dist fallback = 免重启静态文件后门（2026-08-24 实测）
+
+`dsh-host-frontend-static`（`frontend-static`）占 webserver fallback 席位，服务 `@deepseek-ai/dsh-web-frontend/dist` 根目录：**逐请求 `readFile`、无缓存**（源码 `serveStatic` L46-71），越界 403、未知扩展名按 `application/octet-stream` 出（浏览器 `<img>` 会嗅探渲染，octet-stream 也能显示）。
+
+- **推论**：往 dist 根目录**放**文件即时生效（GET 可达），零代码、零重启——适合临时给手机/外网隧道（dsh-pocket 只通 3080）递送截图/预览页等一次性工件。实测：`cockpit-view.html` + `cockpit-full.png` 丢进 dist → `http://127.0.0.1:3080/cockpit-view.html` 立即 200。
+- **边界**：只放不改（不碰既有文件，非改官方源码）；包更新时文件自然消失；正式功能仍应走插件注册路由（`ctx.inject(["webServer"])` + `register`），此法只做临时递送。
+- 本机 dist 实际位置（profile 无独立副本，resolve 落到全局）：`<npm-global>\node_modules\@deepseek-ai\dsh\node_modules\@deepseek-ai\dsh-web-frontend\dist`。
