@@ -395,3 +395,19 @@ od generate --project <id> --design-system <id> --skill <id> --prompt-file <path
 3. 若 od 生成的 `<title>` 是中文，ui-ux-pro-max 纪律要求 head/title 用 ASCII（防 mojibake）→ prompt 里加硬约束。
 4. 媒体（生图）写进 od 返回的项目 id，可能不是"当前设计项目"——用复制把文件拿进目标项目目录。
 5. 产品图：`od media generate --surface image --model vela/gpt-image-2 --project <p> --prompt "..."; od media wait <task> --since <n>`（慢模型返回 `task <uuid> still running` 文本，poll 到 exit 0 拿 `{"file":...}`）。
+
+
+## 45. 往 UTF-8 文件追加内容：别用 PowerShell Set-Content 重写（会整份乱码）（2026-08-24 实战）
+
+**现象**：用 Set-Content 重写一个本来就好的 UTF-8 文本文件，结果整份变成乱码（GBK 噪声 + U+FFFD）。
+
+**根因**：Windows PowerShell 5.1 的 Set-Content 用 .NET 源编码重建文件，遇文件里已有 em-dash/中文间隔号/中文标点等特殊字节时，与 -Encoding UTF8 不一致 → 重写破坏既有字节，中文全乱码。
+
+**正确做法（按优先级）**：
+1. Node 追加（最稳，纯 UTF-8，无 shell 转义坑）：require('fs').appendFileSync(path, txt, 'utf8')
+2. PowerShell 用 Add-Content -Encoding UTF8（只 append，不重写已有正文）。
+3. 绝不用 Set-Content 重写一个含中文/特殊字符的 UTF-8 文件。
+
+**修复路径（一旦写坏）**：文件在 git 仓库里则 git checkout -- <file> 恢复 HEAD 即干净；之后用 Node 追加，不要再用 PS 重写。
+
+**已试无效**：用 PowerShell -replace 正则去修反引号/反斜杠（PS here-string + 正则里互相吞，越修越乱）；根治是换 Node 或 Add-Content，不碰 Set-Content。
