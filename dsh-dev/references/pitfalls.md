@@ -374,3 +374,24 @@ modlens config set openai.extraBody '{"max_tokens":8192}'
 - 升级引擎后**贴图即生效无需重启**（§34：每次贴图临时 spawn 磁盘上的引擎，冷读）。
 
 **已试无效项**：structuredOutput true（网关不支持）、3.24.0（解析未修）、全局装 modlens CLI（无关——插件 spawn 的是包内引擎）。
+
+
+## 44. OpenDesign（od）是设计引擎：通过 prompt 驱动，不要手动改 HTML（2026-08-24）
+
+**原则**：陈公子明确"od 是主要 UI 路径"。让 od 生成/改设计时，agent 容易自己动手改 HTML/CSS（违背定位）。正确做法是把设计需求写成 prompt，交给 `od generate`，让 od 的 runtime agent 用 skill + design-system 自己产出，agent 只做验收。
+
+**关键命令/参数（实测有效）**：
+```
+od generate --project <id> --design-system <id> --skill <id> --prompt-file <path> --json
+```
+- daemon URL 用 env：`set OD_DAEMON_URL=http://127.0.0.1:7457`（od.mjs 默认连 7456，而 `tools-dev run web` 起的 daemon 在 7457；不设 env 会 ECONNREFUSED）。
+- cli 入口：`D:\job\developer\OpenDesign\open-design\apps\daemon\bin\od.mjs`（桌面版 `od` 不在 PATH）。
+- 常用 skill：`redesign-existing-projects`（在现有页面上接图/改）、`ui-ux-pro-max`、`design-review`。
+- runtime 默认 deepseek-harness（bin=dsh），见 `/api/agents`。
+
+**坑**：
+1. `od generate` 是**重新生成**而非打补丁，会覆盖同名文件（somnovita-landing/dashboard/mobile-app.html）。**先备份**项目目录再跑。
+2. 生成是异步的：命令只返回 `runId/conversationId`（秒回），实际写盘在几分钟后。判断进度看项目目录文件的 `LastWriteTime`（`.od-skills` 写入=agent 被唤醒）。
+3. 若 od 生成的 `<title>` 是中文，ui-ux-pro-max 纪律要求 head/title 用 ASCII（防 mojibake）→ prompt 里加硬约束。
+4. 媒体（生图）写进 od 返回的项目 id，可能不是"当前设计项目"——用复制把文件拿进目标项目目录。
+5. 产品图：`od media generate --surface image --model vela/gpt-image-2 --project <p> --prompt "..."; od media wait <task> --since <n>`（慢模型返回 `task <uuid> still running` 文本，poll 到 exit 0 拿 `{"file":...}`）。
