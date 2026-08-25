@@ -411,3 +411,20 @@ od generate --project <id> --design-system <id> --skill <id> --prompt-file <path
 **修复路径（一旦写坏）**：文件在 git 仓库里则 git checkout -- <file> 恢复 HEAD 即干净；之后用 Node 追加，不要再用 PS 重写。
 
 **已试无效**：用 PowerShell -replace 正则去修反引号/反斜杠（PS here-string + 正则里互相吞，越修越乱）；根治是换 Node 或 Add-Content，不碰 Set-Content。
+
+## 46. DSH 槽位四种 kind：chain 槽注册必须带 select（选举制），不能带 id/order（2026-08-25 实战）
+**现象**：client 插件注册 `conversation.chat.turnTail` 时抛 `Uncaught Error: chain slot conversation.chat.turnTail requires options.select`，且**整个 apply 回滚**——主题已 layered 也会被连带 dispose，化身/卡片全部消失（连坐效应，一个槽注册错全插件挂）。
+**根因**：DSH slots 系统有四种 kind：single（单占）/ keyed（按 key 分格）/ list（按 id 多行）/ **chain（选举制）**。chain 槽的契约（ui-renderer lib/client.js `spec.kind === chain` 分支）：每个 entry 注册时必须提供 `select(ownerProps)` 纯函数——渲染时依次询问，返回非 null 的第一个 entry 接管渲染（返回值作为 `matched` prop 传给组件）；返回 null 即让位。`id`/`order` 是 list 槽的选项，chain 校验只要求 select。
+**官方姿势**（dsh-client-ui-deliverables 注册 turnTail 的写法）：
+```js
+ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
+  name: conversation.chat.turnTail,
+  select: (owner) => { /* 纯读，无副作用；返回 {imgs} 或 null */ },
+  locale: NS,          // 可选
+  inject: () => ({})   // 可选：per-entry 服务注入
+}, MyComponent));       // 组件收到 { ...ownerProps, matched }
+```
+**证据**：web-frontend dist `casechain:if(n.select===void 0)throw new Error(...)`；ui-renderer `matched = entry.select(ownerProps); if (matched !== null) { elected = guarded(entry, ..., {...ownerProps, matched}); break; }`。
+**选举顺序注意**：官方 bundle 先加载先注册，故 deliverables 产物行优先；自己的 select 返回 null 时让位（无图/无产物互不干扰，有冲突时产物行赢——合理）。select 在渲染期调用，必须是纯函数（禁 setState/副作用），异常会被 catch 当 declined。
+**chain 槽已知成员**：`conversation.chat.turnTail`、`conversation.composer`。写插件前先看 `dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts` 确认目标槽的 kind。
+**已试无效**：带 `id`+`order` 注册 chain 槽（直接抛错，apply 回滚全插件连坐）。
