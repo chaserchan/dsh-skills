@@ -438,3 +438,38 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 - **用共享函数避免重复**：`applyTheme(el, branding)`（设置/清除主题变量）在两个根元素复用；`applyLogin(ov, branding)`（文本/logo/背景）仅登录遮罩。
 - 颜色输入用 **text**（留空=主题默认）而非 `type=color`（后者无法表达空值）。
 **验证**：Playwright mock `/api/config` → 断言登录遮罩 `title/subtitle/footer` 文本 + `style` 里的 `--dsw-alias-bg-layer-3`/`--dsw-alias-brand-primary`；管理面板 `.dsh-uds-modal` 的 theme vars；「登录设置」tab 表单预填值。
+
+## 48. DSH 前端是 CSS-modules 哈希类名：用"后缀匹配"稳定定位，不要写死哈希前缀（2026 实战）
+**现象**：给 DSH 工作台做定制皮肤时，类名是 `uV2eYG_root`/`qDHVXG_searchInput`/`pI_x6G_sidebarCol` 这类 `前缀哈希_语义后缀`。直接写 `.uV2eYG_root` 会在官方更新后失效。
+**根因**：DSH 前端用 CSS modules，类名 = 随机哈希前缀 + 稳定语义后缀。哈希前缀每次构建/版本会变，后缀是稳定的（root/searchInput/sidebarCol/sessionRow/projectRow/turnStatus/turnStatusClock/bubble/action/toolRow）。
+**正确姿势**：用**后缀匹配**定位——`[class^="_root"]`、`[class$="_searchInput"]`、`[class*="_sessionRow"]`。真正稳定、跨版本可用。要精确匹配某类用 `[class*="_xxx"].uV2eYG_xxx` 组合（针对已知后代精确）。
+**佐证**：e2e 抓取 `document.querySelectorAll('[class*="_sessionRow"]')` 稳定命中；`[class*="_action"]::before` 能量点误伤图标按钮（见 49）。
+**已试无效**：写死 `.uV2eYG_card` 这类哈希前缀类名做皮肤（官方一更新就断）。
+
+## 49. 选择器过宽会误伤：`[class*="_action"]` 命中大量图标按钮，能量点全乱（2026 实战）
+**现象**：给"工具行动行"加琥珀色状态点 `[class*="_action"]::before`，结果消息底部一排**图标按钮**（复制/编辑/重试等）全都冒出黄点，挤成一排很丑。
+**根因**：`[class*="_action"]` 子串匹配会命中**所有含 _action 的元素**，包括纯图标按钮（p-xYUq_action/_8_XoUG_action 是操作图标行，不是工具调用行）。CSS-modules 后缀过于通用。
+**正确姿势**：收窄选择器到真正有文本语义的类——用 `[class*="_toolRow"]`/`[class*="_toolCall"]`（工具调用行），而不是 `[class*="_action"]`（图标按钮行）。能量点只加在工具行。
+**佐证**：e2e 验证 `getComputedStyle(el,'::before').backgroundColor` 发现 p-xYUq_action/_8_XoUG_action 都被置成 rgb(255,200,87)，去掉 _action 后恢复 none。
+**教训**：给"动作/行动行"加装饰要先分清"工具调用文字行"vs"图标操作按钮"，后缀 _action 太泛。
+
+## 50. 官方硬编码灰色不在 token 体系：uV2eYG_card / gdEzaW_bubble 都是 rgb(44,44,46)（2026 实战）
+**现象**：深空驾驶舱主题下，输入框外层卡片、排队队列用户消息气泡仍是**浅灰色块**，跟深空底格格不入。
+**根因**：DSH 某些组件用**硬编码颜色**而非 --dsw-alias-* 变量（如 `.uV2eYG_card` 背景 `rgb(44,44,46)`、`gdEzaW_bubble` 也是 `rgb(44,44,46)`），这些不在 overrideTokens 覆盖范围内，token 层够不着。
+**正确姿势**：用 CSS 后缀匹配对具体组件类**强制覆盖**——`.uV2eYG_card`/`.uV2eYG_root`/`.uV2eYG_scroll`/`.uV2eYG_grow` 全部 `background:color-mix(in srgb,var(--dsw-alias-bg-layer-*),transparent)` + `!important`；`[class*="_bubble"]` 同理。交给玻璃拟态统一。
+**佐证**：e2e 抓到 `uV2eYG_card bg rgb(44,44,46)`、`gdEzaW_bubble bg rgb(44,44,46)`，覆盖后变深空 `color(srgb 0.086/0.118/0.2 @0.88)`。
+**注意**：这类硬编码灰官方可能更新，覆盖时保留后缀类名（uV2eYG_* / gdEzaW_*），别只写 hash 前缀。
+
+## 51. 气泡定位：position:fixed 不随拖动，改 absolute 挂在 host 子元素（2026 实战）
+**现象**：右下角 AI core 悬浮球加了互动气泡，球被拖走后气泡还留在原位（错位）；且 hover 才显示不满"常显"。
+**根因**：① 气泡 `position:fixed` 相对视口定位，球（`position:fixed`）虽能拖但气泡没跟随；`host.offsetLeft` 对 fixed 元素取到 0，计算错位。② hover 触发，非 hover 不显示。
+**正确姿势**：气泡作为 **host 子元素 + `position:absolute`** 相对 host 定位（`bottom:calc(100%+12px)` 球上方），天然随球移动；`overflow:visible`（host 是圆形 overflow:hidden 会裁掉气泡）；默认 `showBubble(true)` 常显 + 半透明低干扰。
+**佐证**：e2e `bubbleIsChild:true`(球子元素)、`bubblePos:absolute`；fixed + offsetLeft 方案导致气泡错位到左上角。
+**教训**：跟随可拖动元素的浮动层，优先做子元素 absolute，别用 fixed+JS 算坐标。
+
+## 52. 官方类 border 被"更具体选择器"压制：`[class*="_turnStatus"]` 去不掉边框，要补官方类名（2026 实战）
+**现象**：给 `[class*="_turnStatus"]` 设 `border:none !important`，Deep diving 状态条仍有 `1px solid rgb(42,61,99)` 边框。
+**根因**：官方可能用更具体的 `.Md3f7G_turnStatus`（CSS-modules 具体类）设定 border，其优先级/特殊性压过 `[class*="_turnStatus"]`（属性选择器特殊性较低），`!important` 在同级 !important 下仍由更具体者胜出。
+**正确姿势**：同时写官方类名 `[class*="_turnStatus"], .Md3f7G_turnStatus{ border:0 none !important; }`，用组合选择器提高特殊性；必要加 `border-style:none`/`outline:none`。
+**佐证**：e2e `directBorder: 1px solid rgb(42,61,99)`，补官方类名后 `border:0px none`。
+**教训**：`!important` + 属性选择器仍可能输给官方具体 CSS-modules 类，需补官方类名或提高特殊性。
