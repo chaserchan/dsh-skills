@@ -428,3 +428,13 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **选举顺序注意**：官方 bundle 先加载先注册，故 deliverables 产物行优先；自己的 select 返回 null 时让位（无图/无产物互不干扰，有冲突时产物行赢——合理）。select 在渲染期调用，必须是纯函数（禁 setState/副作用），异常会被 catch 当 declined。
 **chain 槽已知成员**：`conversation.chat.turnTail`、`conversation.composer`。写插件前先看 `dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts` 确认目标槽的 kind。
 **已试无效**：带 `id`+`order` 注册 chain 槽（直接抛错，apply 回滚全插件连坐）。
+
+## 47. 给登录/注入 UI 做"可配置外观 + 主题跟随"（2026-08 dsh-user-system branding 实测）
+**需求**：登录页标题/副标题/底部/logo/背景/主题色可配置，且**自动跟随 DSH 主题插件**；用户管理面板也要跟随主题。
+**关键模式**：
+- **对外观类配置用"公开 config 接口"**：登录页未登录也要渲染 → 加 `GET /api/config`（公开，无需认证）返回外观对象；admin 用 `PUT /api/config`（admin 认证）改。存 store 并落盘 users.json，字段白名单化 + 全部带默认值（留空=主题默认）。
+- **主题跟随用 `--dsw-alias-*` 变量**：注入 UI 本就用这些变量 → `auto`（默认）时**不覆盖**，天然跟随 DSH 主题插件；`light`/`dark` 时在目标元素 `.style.setProperty('--dsw-alias-*', 值)` 覆盖即可；`primaryColor`/`cardColor` 再覆盖 `--dsw-alias-brand-primary`/`--dsw-alias-bg-layer-3`。
+- **登录专属 vs 全局**：`theme`/`primaryColor`/`cardColor` 同时作用登录遮罩+管理面板（需求"面板也跟随主题"）；`title`/`subtitle`/`footer`/`logo`/`bgImage`/`bgColor` 只作用登录页。
+- **用共享函数避免重复**：`applyTheme(el, branding)`（设置/清除主题变量）在两个根元素复用；`applyLogin(ov, branding)`（文本/logo/背景）仅登录遮罩。
+- 颜色输入用 **text**（留空=主题默认）而非 `type=color`（后者无法表达空值）。
+**验证**：Playwright mock `/api/config` → 断言登录遮罩 `title/subtitle/footer` 文本 + `style` 里的 `--dsw-alias-bg-layer-3`/`--dsw-alias-brand-primary`；管理面板 `.dsh-uds-modal` 的 theme vars；「登录设置」tab 表单预填值。
