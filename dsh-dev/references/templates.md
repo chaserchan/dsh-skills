@@ -133,3 +133,37 @@ Invoke-WebRequest http://127.0.0.1:3110/plugins/<id>/client.js   # 期望 200
 ```
 
 > 本地开发用 link 安装时，**插件目录内必须自行 `pnpm install`**（link 不会自动装依赖）；生产/发布用 registry 版本号安装最稳。
+
+## 八、设置侧边栏菜单 / 插件卡片（2026-08-26 验证，dsh-cockpit 实战）
+
+三层槽位对应三种"设置入口"（别混用）：
+- **设置侧边栏菜单项** → `settings.section` 槽（id=侧边栏 nav 身份、label=菜单标题、component=点击后页面）。官方 models/general/agent-preset 都走它。
+- **插件配置页卡片** → `settings.plugin.item` 槽（key=host namespace 一致，显示 = host 服务的 namespace ∩ 卡片 key）。
+- **插件页内 tab** → `settings.plugins.tab` 槽（id+label+children）。
+
+### 侧边栏菜单项（推荐，最醒目）
+```js
+// host（只在 profile node_modules 可解析的包内，link: 需 junction）
+import { installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-settings";
+import z from "@deepseek-ai/schemastery";
+const NS = settingsNamespace("your-plugin");   // 小写 kebab
+const Schema = z.object({ "my.setting": z.boolean().default(true) });
+installSettingsSection(ctx, NS, Schema, { "my.setting": true }, { setSource: (f)=>{}, onChange: ()=>{} });
+
+// client（base module: react + @deepseek-ai/dsh-client-runtime/client）
+const scope = ctx.settingsScope.bind({ namespace: "your-plugin" });
+ctx.slots.inject("settings.section", () => ctx.slots.register({
+  name: "settings.section",
+  id: "your-plugin",
+  order: 15,
+  label: () => "你的菜单名",
+  locale: "settings.your-plugin",
+  inject: () => ({ t: (k) => k }),
+}, YourSectionComponent));
+```
+- 组件读值：`scope.getSnapshot().value`，写：`scope.set("my.setting", v)`（host schema 校验 + settings.yaml 热加载）；
+- 验证：`ctx.settingsScope.describe().getSnapshot().view.namespaces` 必须含你的 NS（否则侧边栏项不出现——这是消费端分发的唯一闸门）。
+
+### 重要前提
+- 插件若是 **link: 安装**：host import dsh-settings/schemastery 需要把 profile node_modules **junction** 到插件目录（`New-Item -ItemType Junction -Path <插件>\node_modules -Target <profile>\node_modules`），否则 ESM 解析失败 → host 崩、整个 DSH 起不来。
+- schemastery 无 `z.enum`（用 z.string()）；`settingsNamespace("x")` 返回字符串。

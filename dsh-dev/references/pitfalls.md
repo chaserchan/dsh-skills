@@ -473,3 +473,89 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **正确姿势**：同时写官方类名 `[class*="_turnStatus"], .Md3f7G_turnStatus{ border:0 none !important; }`，用组合选择器提高特殊性；必要加 `border-style:none`/`outline:none`。
 **佐证**：e2e `directBorder: 1px solid rgb(42,61,99)`，补官方类名后 `border:0px none`。
 **教训**：`!important` + 属性选择器仍可能输给官方具体 CSS-modules 类，需补官方类名或提高特殊性。
+
+
+## 53. DSH 前端加 Three.js 3D：运行时动态加载 ESM，不能 import 本地 node_modules（2026 实战）
+**现象**：想在 DSH 插件客户端（lazy-CJS bundle）加 Three.js 3D 背景/化身。
+**根因**：DSH client bundle 是 lazy-CJS（`__ModuleLoader__.load`），不是 ES module，无法 `import three`；three@0.185+ 只发 ESM（无 three.min.js UMD），本地 od node_modules 的 three 浏览器无法直接用（Node 打包路径）。
+**正确姿势**：运行时动态注入 `<script type="module">`，里面 `const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js")`，挂 `window.__THREE` 再 dispatch 事件。**用事件 + 轮询双兜底**（module import 时序竞态：监听器可能拿到 undefined）。bundle 不膨胀，CDN 才加载。
+**佐证**：e2e `window.__THREE` true；手动 dispatch vs 轮询兜底（轮询稳）。
+**注意**：three 0.185 无 UMD（unpkg three.min.js 404），用 jsdelivr `build/three.module.js`（650KB）。
+
+## 54. headless Edge 截不到 WebGL canvas：WebGL 层不参与普通 captureScreenshot（2026 实战）
+**现象**：Three.js 背景/粒子 canvas 在 headless 截图里永远看不到，但 `canvas.toDataURL()` 有内容（WebGL 确实渲染了）。
+**根因**：headless+SwiftShader 下 WebGL canvas 不走普通 canvas 合成，`Page.captureScreenshot` 抓不到 WebGL 光栅化结果（只抓到 DOM/2D canvas）。这是 headless 局限，**不代表真实浏览器不可见**。
+**正确姿势**：验证 WebGL 视觉效果**必须用真实（非 headless）浏览器肉眼确认**，headless 截图只能验证"canvas 存在 + toDataURL 非空 + 无 console NaN 报错"。别用 headless 截图判 WebGL 粒子"不可见"。
+**佐证**：toDataURL=30634（有内容）但截图纯深空；z-index 拉满仍看不见 → 实为 headless 局限。
+
+## 55. DSH 插件 reload 会多次 apply：挂载元素必须防重复（2026 实战）
+**现象**：加了右下角化身/背景，DSH 插件 HMR reload 后界面叠出多个相同的球/元素。
+**根因**：DSH 插件热重载会多次调用 `apply`，`mountAvatar`/`mountXxx` 若无"先移除旧元素"保护，每次 apply 都新建一个 → 叠出多个。
+**正确姿势**：凡用固定 id 挂载的宿主（`#dcp-avatar`/`#dcp-aurora`），创建前先 `document.getElementById(id)?.remove()`，保证唯一。或用 `ctx.effect` 清理。
+**佐证**：console 多次 `[dcp] cockpit client apply`，右下角两个球 → 加 remove 后唯一。
+
+## 56. originkit 组件库：MCP 取源码（需 key）+ catalog 免 key 本地打包（2026 实战）
+**现象**：想用 originkit 的动画组件（snowfall/particlesphere/starburst）。
+**根因**：originkit 是 MCP 组件库（`mcp.originkit.dev/vellumai`），`list_components` 免 key（catalog 本地打包 `src/component-index.json`），`get_component` 需 key（每天 10 次）。JSON-RPC 2.0 + `Authorization: Bearer <key>`；响应可能是 JSON 或 SSE（需解析 data: 行）。
+**正确姿势**：`POST https://mcp.originkit.dev/vellumai`，body `{jsonrpc:"2.0",id:1,method:"tools/call",params:{name,arguments}}`。组件是 React/TSX，DSH 纯前端需**提取其核心算法**（three.js Points/InstancedMesh）用原生 JS 重写，不能直接用 React 组件。
+**佐证**：fetch particlesphere 返回 200，tsx 含 three.js 核心（InstancedMesh+AdditiveBlending）。
+**安全**：key 存 `~/.dsh/dsh-cockpit/originkit-key.json`（本地持久非 git 仓库），**绝不写进会被 git push 的 reminders/skills**。
+
+
+## 57. DSH 背景层会被内容区玻璃块遮挡/干扰，且 "全屏覆盖" vs "不干扰文字" 难两全（2026 实战）
+**现象**：给深空驾驶舱加全屏背景动画（雪花/Tornado/Morphing Rings），要么太小看不见，要么太大盖住界面/压文字，反复调不达意。
+**根因**：DSH 内容区（sidebar/messages/composer）是**半透明玻璃**，背景 canvas 在其下；想让背景"全屏铺满"就会透过玻璃压到文字，想"不干扰文字"就得极淡 → 变成"蚊子大/看不见"。这是结构性矛盾，不是参数能完美调和。
+**正确姿势**：① 涉及 DSH 工作台的背景动画要克制——**极淡 + 只在空白区域**（如 aurora 极光这类一直低调的）；② 真实全屏背景动画（Tornado/粒子）更适合**独立 demo 页**（originkit 官网那种），不适合塞进 DSH 工作台；③ 用户说"去背景"时立即停用 initThreeScene，别反复调。
+**佐证**：canvas 全屏动画 avg=4~17，但截图里要么太亮盖屏、要么被玻璃块遮住显得淡；用户反复"不够满/太亮/太丑/去掉"。
+**教训**：DSH 工作台的性质决定背景必须极谦逊，跟"产品演示页"的全屏动画需求冲突。定程度时先问用户"背景要极简底纹还是全屏主角"。
+
+## 58. has 字符确认 canvas 有内容 ≠ 肉眼可见：litPixels 采样差异大（2026 实战）
+**现象**：写 e2e 验证 canvas 背景"有内容"（getImageData 采到 lit>0），但截图/肉眼几乎看不到。
+**根因**：`getImageData` 采样是**井字形跳采**（如 i+=4*399），对稀疏粒子时采样点容易全落在空白处；且加色混合（lighter）的微小粒子 alpha 低，阈值(>12)下被判暗。lit>0 只证明"有像素"，不证明"肉眼可感知"。
+**正确姿势**：验证粒子背景"可见性"要**靠浏览器截图 + 肉眼**，不能只看 litPixel 统计。lit 数值只能当"有内容"的粗判，不能当"够亮够满"的验收标准。
+**佐证**：同代码不同版本 lit 从 71(满)→16→4→2(淡)，但每版截图肉眼感受和 lit 不完全对应。
+**教训**：视觉验收必须看截图/真机，canvas 像素统计只作辅助。
+
+## 59. textarea 蓝边框去掉：border/shadow 用高特异性 + 官方类名压，outline 是默认 focus ring（2026 实战）
+**现象**：`<textarea class="uV2eYG_input">` 有蓝色边框，`[class*="_input"]{border:none !important}` 压不住。
+**根因**：官方用**具体类**（`.uV2eYG_input`）+ 可能内联样式 / `:focus-visible`，属性选择器 `[class*="_input"]` 特异性不够（同坑 #52）。
+**正确姿势**：用**官方类名 + 高特异性**——`textarea.uV2eYG_input, .uV2eYG_input[data-phase]` 设 `border:0 !important / box-shadow:none !important / outline:0 !important`。这样 border/shadow 能清掉（e2e 实测 `border:0px none / shadow:none`）。但 `outline` 是浏览器默认 focus ring，`outline:none` 也压不住时属 Chrome 强制，需 `:focus-visible` 或 JS 内联。
+**佐证**：e2e border=0px none + shadow=none，outline 仍报 rgb white 3px（浏览器默认 focus ring，非蓝）。
+
+## 60. DSH 插件 settings.plugin.item 卡片不显示：host 未 serve namespace 或槽位/时机不对（2026-08-26 实战）
+**现象**：按官方 adding-a-settings-card 路径（host installSettingsSection + client settings.plugin.item）注册工作台设置，设置页始终看不到卡片。
+**根因链**（多因子，逐层排查后才能定位）：
+① host 若 import `@deepseek-ai/dsh-settings` 且插件是 **link: 安装**（Node 从插件真实路径找依赖，够不到 profile node_modules）→ ESM 解析失败 → **host 崩、整个 DSH profile 起不来**（必须 junction/或放 profile 的 node_modules）。
+② `settings.plugin.item` 卡片显示 = **Host 服务的 namespace（settingsScope.describe().view.namespaces）∩ client 注册的卡片 key**——官方 ui-settings-plugins 的 ConfigurablePluginsTabController.publish() 只显示交集；host 没 serve → 永不显示。
+③ client 注册若用 `ctx.slots` 直接注册（非 `settingsScope` 作用域的 scoped.slots）或时序早于消费端订阅 → 卡片不在 ledger。
+**正确姿势**：
+- host：`installSettingsSection(ctx, settingsNamespace("你的-名"), schema, entry, {setSource, onChange})`，且 host 包必须在 profile node_modules 里可解析（link: 需 junction）；
+- client：`ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({name, id, key: 同名namespace, locale, inject}, Card))`——key 必须与 host namespace 一致；
+- 验证：client 里 `ctx.settingsScope.describe().getSnapshot().view.namespaces` 必须含你的 namespace（这是"消费端会不会分发"的唯一裁决）。
+**佐证**：describe().view.namespaces 含 dsh-cockpit 后仍不显示 → 才怀疑消费端/时机；我最后用 settings.section（见 61）直接进侧边栏菜单，绕开 plugin.item 的切片复杂度。
+
+## 61. 设置侧边栏菜单项：注册 settings.section 槽，不是 settings.plugin.item/plugin.tab（2026-08-26 实战）
+**现象**：要把"工作台设置"做成设置侧边栏的直接菜单项（跟通用设置/模型/插件并列），用 settings.plugin.item 或 settings.plugins.tab 都不对（那是"插件区"里的内容）。
+**根因**：设置侧边栏菜单项（通用设置/模型/Agent 预设/插件）来自官方 **`settings.section` 槽**（dsh-cordis-client-runner 的 settings sections store 消费；client-ui-settings-models 注册 id=models/label=nav 即侧边栏项）。settings.plugin.item = 插件配置页里的卡片；settings.plugins.tab = 插件页内的 tab。
+**正确姿势**：`ctx.slots.inject("settings.section", () => ctx.slots.register({name:"settings.section", id:"你的-id", order:15, label:()=>"菜单标题", inject:()=>({t:k=>k})}, SectionComponent))`——id 成侧边栏 nav 身份、label 成菜单标题、component 是点击后渲染的设置页。e2e 抓 nav 里含"工作台设置"。
+**佐证**：设置侧边栏 items = [通用设置,手机访问,模型,插件,工作台设置,Agent 预设,插件市场]（含工作台设置）。
+
+## 62. DSH 消息全文不渲染的隐藏杀手：extractImages 里 for...of 全局正则（LOCAL_RE is not iterable）打断消息组装链（2026-08-26 实战）
+**现象**：整个会话的消息文字全部不显示（不只图片），但 console 无"明显"相关报错、或只有一个 Uncaught TypeError in extractImages。
+**根因**：`const LOCAL_RE = /.../gi` 是**全局正则对象**，直接 `for (const m of LOCAL_RE)` 会抛 `TypeError: LOCAL_RE is not iterable`（全局正则本身不可迭代，必须 `text.matchAll(LOCAL_RE)`）。此错误发生在 conversationEvents.update（图片累积）→ ConversationNodeAssembler.acceptMatch 链上 → **消息节点组装中断 → 全文不渲染**。
+**正确姿势**：遍历全局正则一律用 `text.matchAll(RE)`（或 .exec 循环）；`for...of 正则对象` 必抛 not iterable。同函数内 MD_IMG_RE/COCKPIT_RE 用了 matchAll 而 LOCAL_RE 忘记 → 一字之差毁全链。
+**佐证**：console `Uncaught TypeError: LOCAL_RE is not iterable at extractImages ... at ConversationNodeAssembler.acceptMatch`；改 matchAll 后消息恢复。
+
+## 63. 回车发送/输入框行为：别拦截 DSH 官方 InputBar 的 Enter，它原生就是提交（2026-08-26 实战）
+**现象**：自加 keydown 拦截（preventDefault + 点发送钮）实现"回车发送"，结果：慢、双路径、运行中回车会打断 agent。
+**根因**：DSH 官方 InputBar（dsh-client-ui-conversation L3779-3791）**原生处理 Enter**：`if (e.key==="Enter" && !e.shiftKey) { ... keyboard.arbitrate("enter", composing); e.preventDefault(); keyboard.submit(resolveSubmitMode(...)) }`。官方本来就是 Enter=提交、Shift+Enter=换行、运行中有 busy 判断。我再拦截 = 与官方双路径冲突（都 preventDefault/都 submit）→ 慢/误杀。
+**正确姿势**：**不要拦截**——官方 InputBar 已支持 Enter 提交/Shift+Enter 换行；如需确认行为改 placeholder 即可（增强时只动 placeholder，不碰 keydown）。官方提交机注释："Enter during the Host round-trip is a no-op"（提交中 Enter 自动无操作，不会误杀）。
+**佐证**：删掉自加 keydown 后回车发送恢复正常（官方原生）。
+
+## 64. 页面卡死/无响应的排查方向：先查 console 异常链，再看"改 style 触发 MutationObserver 自触发循环"（2026-08-26 实战）
+**现象**：DSH 页面突然无响应/卡死（可看 console 里的异常或干脆白屏）。
+**根因**（两个该会话踩过的高危点）：
+① `MutationObserver.observe(..., {attributes:true, attributeFilter:["style"]})` + 回调里**又改元素 style** → 改 style 触发 observer → 再改 → **无限循环** → 卡死。修复：只监听 childList / 或在回调里加 cancelled 标志防自触发。
+② 全屏 canvas 动画（three.js/粒子）若逐帧渲染海量对象（未 clamp 的 segTotal/弧半径）→ 单帧几十万线段 → 卡死。修复：几何段数上限 + reduced-motion 降级。
+**正确姿势**：MutationObserver 改样式时用 `mo.observe(el,{childList:true,subtree:true})`（不监听 attributes），或回调内 `if(!cancelled) requestAnimationFrame(apply)` 防自触发；canvas 动画必须 clamp 每帧运算量。
+**佐证**：console `Cannot access 'applyBackgroundToDom' before initialization` 是 TDZ（const 声明在调用后）同样会卡设置注册；attributes 监听自触发循环是"改 style 无限循环"。
