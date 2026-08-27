@@ -646,3 +646,19 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 - 值直接抄官方 CSS 变量（bg-module-platform 实测 rgb(16,22,38)），**不要**用 bg-layer-3/圆角 6 的自编参数；
 - 页面标题 14-15px/500-600 primary + 副标题 tertiary 13px。
 **佐证**：e2e 抓官方 LanguageRow computed style（selector 36px/18px/rgb(16,22,38)）→ 重写后 .dcp-ws-row 实测 rowPadY "14px 0px"、selector 36px/18px/rgb(16,22,38)、switch 28x28，截图观感与官方一致。
+
+## 73. 主题插件三坑：① 插件别强制 setTheme ② overrideTokens 同 source 可运行时重注册（light/dark 双分支）③ alias 变量挂在 body（html 上 var() 解析不到会走 fallback）（2026-08-27 主题修复实战）
+**现象①**：设置-外观 切"浅色/跟随系统"页面主区不变浅；刷新后永远回到深色。**根因**：插件 apply 里 `ctx.theme.setTheme("dark")` 每次都把官方持久化偏好（$DSH_HOME/settings.yaml 的 ui-theme.preference，官方 loopback 写盘）覆盖回深色 → 持久化"不生效"；且插件 overrideTokens 的 60+ 个 alias 全部 light/dark 都写深空暗值 → 浅色主题下 alias 仍被锁暗。
+**现象②**（防环）：MutationObserver 监听 body[data-ds-dark-theme]+回调里无条件 overrideTokens(publish) → 官方 presenter 应用快照写 body attr（同值也写）→ 再触发 observer → publish → 循环/滞后。
+**正确姿势**：
+- **绝不 setTheme**（用户主题偏好是官方的，插件只管皮肤层）；overrideTokens 契约 = {light, dark} 双分支（requiresLightAndDark：BUILTIN_INSPECT_TOKENS 每项都要两值），light 分支引用官方 static 变量同源（`var(--dsw-static-neutral-bluish-00/#fff)`、label 浅色 `bluish-1000/700/600`、border `#0000001a`、tooltip `bluish-850`），dark 保留深空值；
+- `ThemeRuntime.overrideTokens(source, tokens)` 是 **overrides Map set 语义**：同 source 重复调用=替换层并 publish → **theme 切换时按解析主题重注册即可**（订阅 ctx.theme.subscribe + **MutationObserver attributes 兜底**：回调只读 body attr，**只在 dark 值变化时 publish**，同值只更新 aurora 显隐 → 无循环）；
+- alias 内联变量在 **body 元素**（官方 presenter 写 body）——`body{background:var(--dsw-alias-bg-base)}` OK，但 **html 上 var() 解析不到 → 走 fallback 深空**（html,body 双选择器写会锁死 body 背景）→ 只写 body；
+- aurora 深空背景层显示条件收敛为"深色主题 && 用户开启背景层"（浅色强制 none）。
+**佐证**：e2e：浅色 darkAttr:false/rootBg rgb(255,255,255)/aurora none；深色翻转；跟随系统模拟 dark/light 即时翻转；切浅色后 settings.yaml `ui-theme.preference: light`，**刷新后仍浅色**（修复前刷新必被拉回 dark）。
+
+## 74. 官方 UI 选项/菜单项验证：必须真实鼠标事件（Input.dispatchMouseEvent 坐标），el.click() 不触发官方选择链→不写盘（2026-08-27 主题/外观实战）
+**现象**：e2e 里 `document.querySelector(…).click()` 点"浅色"：DOM 立即生效（body attr 翻转）但 **settings.yaml 的 ui-theme.preference 永远是 dark** → 刷新后回到 dark，误判"官方持久化失效"。
+**根因**：官方 AppearanceRow/菜单项的持久化写盘挂在**真实 pointer/mouse 事件链**（onClick 之外的选择/落点处理），合成 `.click()`（untrusted）只触发 React onClick 视觉，不触发写盘链。
+**正确姿势**：e2e 验证官方 UI 交互一律 `getBoundingClientRect()` 取中心坐标 + `Input.dispatchMouseEvent(pressed/released)`；持久化验证读磁盘事实 `~/.dsh/settings.yaml` 的 ui-theme.preference（而非只看 DOM）；重载后读 body 属性 + 截图。真实点击后：settings.yaml=light + 刷新仍浅色（官方持久化本无 bug）。
+**佐证**：同脚本 el.click()→yaml dark；改真实鼠标点击→yaml light + reload 后 darkAttr:false。
