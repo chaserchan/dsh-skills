@@ -580,3 +580,13 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **正确姿势**：textarea 上绑定 keydown：`if(e.key==='Tab'){ const menu=document.querySelector("[role='listbox'][aria-label='触发候选建议']"); if(menu && (menu.getBoundingClientRect().height>1 || menu.offsetParent!==null)){ e.preventDefault(); e.stopPropagation(); const ev=new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true}); Object.defineProperty(ev,'keyCode',{value:13}); Object.defineProperty(ev,'which',{value:13}); ta.dispatchEvent(ev); } }`——与官方真实 Enter 完全一致（焦点也留在 textarea）；菜单关闭后 Tab 恢复默认（跳 + 号）。
 **佐证**：e2e-simtest：dispatch-Enter → `v:"/agent-teams "` 菜单关；click-option → `v:"/"` 菜单仍开。e2e-slashtab 全项 PASS：menuOpened/inserted/menuClosed/focusStayed 全 true。
 **补充**：composer 限高现状（官方已改）：官方 `.uV2eYG_scroll{max-height:var(--dsh-composer-text-max-height);overflow-y:auto}`、`.uV2eYG_input{height:100%}`（不再是固定 52px）+ 注入 `textarea.uV2eYG_input,.uV2eYG_input[data-phase="plain"],textarea[data-phase="plain"]{max-height:180px !important;overflow:hidden auto !important;min-height:56px !important}` 与 `.uV2eYG_grow,.uV2eYG_scroll{overflow:hidden !important}` 已生效：超长文本 180px 封顶 + 内部滚动（sh 964 / scrollTop 可设），双滚动条已消除。
+
+## 68. DSH 插件"主界面守卫"三大坑：登录文案判据误杀 / 15s 窗口不够 / 轮询漏累加 — 整插件不挂载（2026-08-27 验证 70186 实战）
+**现象**：dsh-cockpit 在**已登录主界面**上整个不挂载：avatar 无、背景无、composer placeholder 不改（仍是官方"描述你想要构建的内容"）、回车发送/斜杠菜单增强全失效，console 仅一条 `[dcp] cockpit client apply` 无后续。设置页/`--dump-config`/`/plugins/<id>/client.js` 全正常（200）——**装载链路 OK 但 UI 不生效**。
+**根因**（3 层，需逐层验证）：
+① `isMainUi()` 用**登录文案否定判据**（`/登录后进入|选择工作区|sign in|请登录/` 匹配 `bodyInnerText.slice(0,400)`）：dsh-user-system 插件会在**已登录主界面**渲染"登录后进入 DeepSeek Harness | 账号 | 密码 | 验证码 | 登录"登录表单（位于 body DOM 前 400 字符内）→ 误判为登录页 → 整个 cockpit 跳过挂载。任何其他插件往页面注入含这些词的可视文本都会误杀。
+② 等待窗口 15s 不足：DSH 冷启动（尤其带用户体系等插件 + headless 新 profile）页面先停"工作区选择页"（placeholder"选择一个工作区开始"）再渲染主界面，`_sessionRow` 出现常 >15s → 插件提前放弃（打印"非主界面，跳过"再不复起）。**插件 apply 时机早于 React 主界面渲染，窗口必须覆盖慢加载**。
+③ `waitMain` 只在首次调用累加 `waited`，**轮询 setInterval 回调里漏掉 `waited += 500`** → `waited>=15000` 永不成立 → "非主界面"兜底日志永不打印、poll 永不结束（轻微资源泄漏 + 行为不确定）。
+**正确姿势**：主界面判据只用**结构判据** `!!document.querySelector("[class*='_sessionRow']")`（登录页/工作区选择页不渲染会话行，结构自足；**绝不用文本判据**——其他插件注入的自由文本会误伤）；等待窗口 15s→60s；轮询回调内 `waited += 500` 保证超时兜底真实生效。
+**佐证**：probe4 同页 `hasLoginText:true`（正则命中）+ `hasSessionRow:true`（确实是主界面）→ isMainUi() 却 false；修复后同页 MOUNT `placeholder:"给Chaeman发消息", hasAvatar:true, hasAurora:true, dcpEls:21`，全部注册日志（theme tokens layered/images definition/工作台设置 section）出现。
+**教训**：DSH "主界面/登录页"判定永远选**结构**（会话行/sidebar 容器），不选**语义文本**（文案会被其他插件污染）；对慢加载要"长窗口轮询"而非"短窗口放弃"。
