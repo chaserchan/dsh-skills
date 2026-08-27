@@ -603,3 +603,5 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 - DOM 取 class 一律 `el.getAttribute('class')`（HTML/SVG 通吃），不要 `el.className`。
 - Enter 发送断言前提：agent 空闲 + 无排队消息（检查 placeholder 含"插话"即跳过或先清排队）。
 **佐证**：旧实例同页 `sessionCls:["hHd-Xa_newSession","YDXeBa_sessionRow",...]` + sessionRowAny:true → cockpit 全量挂载；新实例同页 `sessionCls:["hHd-Xa_newSession","nL4_yW_sessionLogButton"]` + sessionRowAny:false → 60s 超时跳过，bodyHead 开头"文件浏览/导出会话日志"。SVG className 坑：v1 脚本 `__err:"Uncaught"`，v2 改 getAttribute 后通过。插话坑：send 模式 `filled:"DCPSEND70186", afterVal:"", sentOnce:0` + "2 条排队消息"按钮。
+
+**已试无效**：点「打开侧边栏」按钮（此时 `_sessionRow` 立即出现）后 Page.reload → 页面仍恢复为侧边栏收起（第二次 apply 判非主界面跳过，但首次 apply 已成功挂载一次并打印全部注册日志）——展/收状态未随点击持久化（或持久化键不在 view|route|session|focus|mode 字面键中），reload 读回旧收起状态。恢复干净验证环境的最稳做法：同一浏览器会话内点开侧边栏后**立即**验证（不要再 reload），或直接清 localStorage 相关键。
