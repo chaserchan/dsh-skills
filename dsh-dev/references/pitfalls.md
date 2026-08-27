@@ -590,3 +590,16 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **正确姿势**：主界面判据只用**结构判据** `!!document.querySelector("[class*='_sessionRow']")`（登录页/工作区选择页不渲染会话行，结构自足；**绝不用文本判据**——其他插件注入的自由文本会误伤）；等待窗口 15s→60s；轮询回调内 `waited += 500` 保证超时兜底真实生效。
 **佐证**：probe4 同页 `hasLoginText:true`（正则命中）+ `hasSessionRow:true`（确实是主界面）→ isMainUi() 却 false；修复后同页 MOUNT `placeholder:"给Chaeman发消息", hasAvatar:true, hasAurora:true, dcpEls:21`，全部注册日志（theme tokens layered/images definition/工作台设置 section）出现。
 **教训**：DSH "主界面/登录页"判定永远选**结构**（会话行/sidebar 容器），不选**语义文本**（文案会被其他插件污染）；对慢加载要"长窗口轮询"而非"短窗口放弃"。
+
+
+## 69. DSH e2e 三个新坑：持久 profile 落在"单会话专注视图"判据失效 / SVG className 是对象 / agent 忙时普通 Enter 进排队不发送（2026-08-27 验证 70186 二次实战）
+**现象**：
+① 用**同一持久 user-data-dir（.tmp-dcp-cdp）重启** headless Edge 打开 3080，页面落到**单会话专注视图**（body 以"文件浏览/导出会话日志/复制ID/Session log/轨迹"开头，**无侧边栏会话列表**），`[class*='_sessionRow']` 不存在 → cockpit 结构判据 isMainUi() 60s 超时 → "非主界面，跳过挂载"，placeholder 仍是官方。而第一个 Edge 实例（主界面视图：新会话/工作区/会话列表）挂载成功（placeholder 给Chaeman发消息、dcpEls>0、theme tokens layered）。
+② CDP Runtime.evaluate 里 `el.className.split()` 抛 Uncaught——SVG 图标元素的 `className` 是 **SVGAnimatedString 对象**，不是字符串。
+③ **agent 处理中** InputBar placeholder 变 `Cmd/Ctrl+Enter 插话发送全部排队消息`（官方插话模式）：此时普通 Enter **不发送**——composer 清空（afterVal=""）但消息不出现（sentOnce=0），进入"排队消息"计数（出现"N 条排队消息"按钮）。
+**根因**：① DSH web 前端记住了上次会话视图（单会话专注模式无 sidebar）；结构判据 `_sessionRow` 只对"主界面视图"成立——**判据没错，是验证环境视图不对**（与 #68 判据选型互补；该视图属"无侧边栏独立 UI"，cockpit 有意跳过）。② Web API 特性（SVG 的 className 是动画对象）。③ 官方 busy 判断（提交中 Enter no-op/排队）——与 #63 同样结论：官方原生行为，别当 bug 修。
+**正确姿势**：
+- cockpit 挂载/发送验证前先确认页面是**主界面视图**（有 `_sessionRow` + 侧边栏）；落在单会话专注视图就 Page.reload 或点"新会话"回主界面；最稳：重启浏览器后 reload 一次再判。
+- DOM 取 class 一律 `el.getAttribute('class')`（HTML/SVG 通吃），不要 `el.className`。
+- Enter 发送断言前提：agent 空闲 + 无排队消息（检查 placeholder 含"插话"即跳过或先清排队）。
+**佐证**：旧实例同页 `sessionCls:["hHd-Xa_newSession","YDXeBa_sessionRow",...]` + sessionRowAny:true → cockpit 全量挂载；新实例同页 `sessionCls:["hHd-Xa_newSession","nL4_yW_sessionLogButton"]` + sessionRowAny:false → 60s 超时跳过，bodyHead 开头"文件浏览/导出会话日志"。SVG className 坑：v1 脚本 `__err:"Uncaught"`，v2 改 getAttribute 后通过。插话坑：send 模式 `filled:"DCPSEND70186", afterVal:"", sentOnce:0` + "2 条排队消息"按钮。
