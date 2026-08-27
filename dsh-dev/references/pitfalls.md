@@ -671,3 +671,13 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 3. **变量链核对**：THEME_TOKENS 每键确认 LIGHT_TOKENS 有对应（漏一个就暗残留）；light 值一律 var(--dsw-static-*) 同源引用（官方 bluish-1000 #0f1115 等）；
 4. **用户可能测旧 bundle**：/plugins/<id>/client.js 响应 `cache-control: no-cache` + src `?rev=`（rev 非文件 hash，会随构建变化）——**硬刷新即新版**；验收前先让用户 Ctrl+Shift+R 并核对 console bundle 版本。
 **佐证**：审计 computed：浅色 icon rgb(97,102,107)/rgb(15,17,21)、handle 白化后 rgba(0,0,0,.1)、文本 #0f1115、dlg rgba(255,255,255,.86)、rootBg #fff——4 项全过；修复前 handle border 为 rgb(15,17,21)（近黑）。
+
+## 76. 官方"繁忙时 Enter 键行为"= ui-conversation.busyEnter（queue/steer）——会话级覆盖的正确姿势（2026-08-27 实战）
+**官方机制**：枚举 `BUSY_ENTER_BEHAVIORS=["queue","steer"]`（queue=排队发送 默认 / steer=插话发送），存 namespace `ui-conversation` 字段 busyEnter（持久于 ~/.dsh/settings.yaml）；仲裁=ComposerSubmissionPolicy.resolve(running, gesture, steeringAvailable)：**busy && steeringAvailable 时** plain Enter→preferred、chord(ctrl/cmd+Enter)→preferred 的反面；**steer 是 best-effort**（AgentLoop 会把窗口外提交转成下一次唤醒的 queue 项）；"Enter during the Host round-trip is a no-op"（#63）。
+**会话级覆盖实现（插件侧，零侵入）**：
+- UI：composer 权限按钮后 DOM 注入小胶囊 select（选项=跟随全局（默认）/排队发送/插话发送），样式复用 dcp-ws-selector 同款（alias 变量，双态自适应）；当前会话 id 经 shell.overlay 静默组件（useSessions.current → window.__dcpCurrentSession）共享给 DOM 侧；
+- 持久化：per-session 用 localStorage（键 `dcp-busyEnter-v1` = {sid: mode}），**不新增 host schema**（避免改 host 必重启）；
+- 行为：拦截 plain Enter（textarea keydown）当 busy && 会话级≠全局：**steer 覆盖=preventDefault+派发官方 chord(ctrl+Enter)**（官方原链 steer）；**queue 覆盖=临时 scope.set("busyEnter","queue")→派发 plain Enter→700ms 后写回原值**（净零，官方原链 queue）；
+- 全局值**现读**（scope.getSnapshot() 每次拦截时取，subscribe 不可靠）；busy 信号复用 turnStatus 300ms tick 曝光 window.__dcpBusy。
+**注意**：官方 busy Enter 的最终提交/排队现象受 steeringAvailable 语义窗口限制（很多 busy 时刻官方本身 no-op/转 queue）——**覆盖保证"用哪个模式"，最终行为=官方原链**；e2e 断言聚焦 intercept 探针（window.__dcpEnterOverride = {sid,mode,global,at}）而非"文本必清空"。
+**佐证**：下拉 prevText="完全权限"（位置✓）；选择写 localStorage + reload 保持；busy+覆盖 → __dcpEnterOverride {mode:"queue",global:"steer"} 触发（steer 覆盖同理）；跟随全局（无会话级）→ 不拦截。
