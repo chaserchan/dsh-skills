@@ -681,3 +681,9 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 - 全局值**现读**（scope.getSnapshot() 每次拦截时取，subscribe 不可靠）；busy 信号复用 turnStatus 300ms tick 曝光 window.__dcpBusy。
 **注意**：官方 busy Enter 的最终提交/排队现象受 steeringAvailable 语义窗口限制（很多 busy 时刻官方本身 no-op/转 queue）——**覆盖保证"用哪个模式"，最终行为=官方原链**；e2e 断言聚焦 intercept 探针（window.__dcpEnterOverride = {sid,mode,global,at}）而非"文本必清空"。
 **佐证**：下拉 prevText="完全权限"（位置✓）；选择写 localStorage + reload 保持；busy+覆盖 → __dcpEnterOverride {mode:"queue",global:"steer"} 触发（steer 覆盖同理）；跟随全局（无会话级）→ 不拦截。
+
+## 77. 注入 composer 工具栏的控件必须与官方 trigger 同构（透明无底框）；"用官方 alias 变量" ≠ 视觉统一（背景也是变量值）（2026-08-27 P0 实战）
+**现象**：插入"完全权限"按钮旁的选择下拉用了 `background:var(--dsw-alias-bg-module-platform)` + 圆角 14 的胶囊——用户一眼指出"框架原生无底框，插件新增的非要有个底框"（明明并排）。
+**根因**：官方权限按钮（Sh0Q9G_trigger 类）是**反直觉的透明**：`background:transparent; border:none; height:28px; font-size:13px; line-height:20px; padding:0 4px 0 8px; color:var(--dsw-alias-label-secondary); border-radius:24px; display:flex; gap:4px` ——**底色也是"透明度"而非颜色变量**；我用了"正式 selector 设计"（胶囊底）→ 与工具栏 flat 风格冲突。
+**正确做法**：并排控件**先取对方 computed 逐值复刻**（写取证脚本：computed 对比 background/border/radius/height/font/padding/color/gap/display），同构后再提交；"样式用 alias 变量"只保证主题跟随，**不保证同构**（背景变量同样会画底）。
+**佐证**：取证脚本输出 select vs perm：修复前 select bg=rgb(53,54,56)（有底）/perm transparent；修复后逐值一致（transparent/border none/24px/28px/13px/0 4px 0 8px/rgb(207,211,214)/gap 4/flex），双态截图（dcp-busyselect-dark/light.png）视觉并排无差异。
