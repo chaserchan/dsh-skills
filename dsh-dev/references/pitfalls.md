@@ -662,3 +662,12 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **根因**：官方 AppearanceRow/菜单项的持久化写盘挂在**真实 pointer/mouse 事件链**（onClick 之外的选择/落点处理），合成 `.click()`（untrusted）只触发 React onClick 视觉，不触发写盘链。
 **正确姿势**：e2e 验证官方 UI 交互一律 `getBoundingClientRect()` 取中心坐标 + `Input.dispatchMouseEvent(pressed/released)`；持久化验证读磁盘事实 `~/.dsh/settings.yaml` 的 ui-theme.preference（而非只看 DOM）；重载后读 body 属性 + 截图。真实点击后：settings.yaml=light + 刷新仍浅色（官方持久化本无 bug）。
 **佐证**：同脚本 el.click()→yaml dark；改真实鼠标点击→yaml light + reload 后 darkAttr:false。
+
+## 75. 浅色模式残留四件套（icon 白/handle 黑/字体白/黑框）的排查法与官方 handle 白化（2026-08-27 主题终审实战）
+**现象**：浅色切换后用户逐细节验收发现：侧栏 icon 白色不可见、左侧栏 handle（`pI_x6G_handle` / `[data-side="sidebar"]`）中间黑色、正文白色、部分组件深色矩形残留——同一主题反复打回。
+**排查法（一次到位，勿局部 patch）**：
+1. **CSS 审计**：grep CSS 段裸硬编码色（`(?<![\w-])color:#e8f1ff`、`background:#0a0e1a` 之类）——正常态已全 var 化后逐元素 computed 审计才是真相：脚本在浅色下提取 icon svg color/handle bg+border/正文 color/弹层+根容器 bg/关键 alias var 实值（--dsw-alias-label-primary 应解析为 #0f1115 近黑、bg-base #fff）——**值对了就不是残留**；
+2. **handle 白化**：官方 sidebar handle 浅色语义是**近黑实线**（border 用 label 系色），用户要求浅色=浅色线 → 加门控 `body:not([data-ds-dark-theme]) [class*="handle"]{background:var(--dsw-alias-border-l2)!important;border-color:…;box-shadow:none}` + `[class*="handle"] *{background:transparent;border-color:transparent}`（覆其内部描边元素）；
+3. **变量链核对**：THEME_TOKENS 每键确认 LIGHT_TOKENS 有对应（漏一个就暗残留）；light 值一律 var(--dsw-static-*) 同源引用（官方 bluish-1000 #0f1115 等）；
+4. **用户可能测旧 bundle**：/plugins/<id>/client.js 响应 `cache-control: no-cache` + src `?rev=`（rev 非文件 hash，会随构建变化）——**硬刷新即新版**；验收前先让用户 Ctrl+Shift+R 并核对 console bundle 版本。
+**佐证**：审计 computed：浅色 icon rgb(97,102,107)/rgb(15,17,21)、handle 白化后 rgba(0,0,0,.1)、文本 #0f1115、dlg rgba(255,255,255,.86)、rootBg #fff——4 项全过；修复前 handle border 为 rgb(15,17,21)（近黑）。
