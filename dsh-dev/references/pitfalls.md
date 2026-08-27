@@ -559,3 +559,24 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 ② 全屏 canvas 动画（three.js/粒子）若逐帧渲染海量对象（未 clamp 的 segTotal/弧半径）→ 单帧几十万线段 → 卡死。修复：几何段数上限 + reduced-motion 降级。
 **正确姿势**：MutationObserver 改样式时用 `mo.observe(el,{childList:true,subtree:true})`（不监听 attributes），或回调内 `if(!cancelled) requestAnimationFrame(apply)` 防自触发；canvas 动画必须 clamp 每帧运算量。
 **佐证**：console `Cannot access 'applyBackgroundToDom' before initialization` 是 TDZ（const 声明在调用后）同样会卡设置注册；attributes 监听自触发循环是"改 style 无限循环"。
+
+## 65. DSH e2e 工作区选择页守卫：headless 新 profile 登录后停在"选择一个工作区"（textarea readOnly），必须先点工作区才能测 composer（2026-08-26 实战）
+**现象**：headless Edge 用**全新 user-data-dir** 登录 DSH 后，`textarea.uV2eYG_input` 存在但 `readOnly:true`、placeholder="选择一个工作区开始"，任何输入（ta.value 赋值 / CDP 真实键盘）都无效，斜杠菜单/回车发送全测不了。
+**根因**：DSH 页面默认路由停在**工作区选择页**（body 文本：新会话/工作区/niucloud-master/plugin 等），composer 是只读占位；只有点击某个工作区卡片（如 `plugin`）后才渲染可交互会话视图。
+**正确姿势**：e2e 脚本里登录后先 `[...document.querySelectorAll('button,[role="button"],li,div')].find(e=>(e.textContent||'').trim()==='plugin').click()` 进入工作区（等 3-4s），再操作 composer；或复用**已选过工作区的持久 profile**（如 dcp-e2e-profile）跳过选择页。headless 里无 `_sessionRow`/composer 不可交互也是此页特征（与 isMainUi 守卫同理）。
+**佐证**：e2e-diag 抓到 ta readOnly:true + placeholder 选择工作区；点 plugin 后 readOnly:false + taPh 变为"给Chaeman发消息"，输入/斜杠菜单/回车全部恢复可测。
+
+## 66. React 受控 textarea 模拟输入：直接 ta.value=+input 事件可能被重置，用原生属性 setter 或 CDP 真实键盘（2026-08-26 实战）
+**现象**：e2e 里 `ta.value='/'` + `dispatchEvent(new Event('input',{bubbles:true}))` 后读回来 ta.value 是空（React 受控组件重置）；同一写法在另一次测超长文本又成功（sh=964），行为不稳定。
+**根因**：React 受控组件以内部 state 为准，绕过原生 setter 的直接赋值 + input 事件在部分状态（readOnly/未进入会话页/组件刚渲染）下不被 React 采纳，渲染时被重置回空。
+**正确姿势**（二选一，均已实测）：
+- 原生 setter（React 一定会感知）：`const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(ta,'文本'); ta.dispatchEvent(new Event('input',{bubbles:true}))`；
+- CDP 真实键盘输入（最保真，模拟手打）：`Input.dispatchKeyEvent {type:'keyDown', key:'/', text:'/', windowsVirtualKeyCode:191}` + keyUp，逐字符。
+**佐证**：e2e-final2 用原生 setter 设 40 行 → scrollHeight 964 生效（限高/滚动可测）；e2e-slashtab 用 CDP 键盘输入 '/' → 斜杠菜单正常弹出。
+
+## 67. 斜杠命令菜单 Tab 选中：拦截 Tab 后向 textarea 派发合成 Enter keydown（复用官方选中路径）；click 选项按钮无效（2026-08-26 实战）
+**现象**：DSH 斜杠菜单（`[role='listbox'][aria-label='触发候选建议']`）打开后按 Tab 焦点跳到 `+` 号按钮（默认行为）；想"Tab 直接选中"时直接 `option.click()` 选了但 textarea 值不变、菜单不关。
+**根因**：官方菜单选项 button 的 React onClick 未挂简单 click 路径（或挂在 pointer 事件上），`el.click()` 走不通；而官方**已原生处理 Enter**（选中高亮项 + 插入 `/cmd ` 带空格 + 关菜单），未处理 Tab。
+**正确姿势**：textarea 上绑定 keydown：`if(e.key==='Tab'){ const menu=document.querySelector("[role='listbox'][aria-label='触发候选建议']"); if(menu && (menu.getBoundingClientRect().height>1 || menu.offsetParent!==null)){ e.preventDefault(); e.stopPropagation(); const ev=new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true}); Object.defineProperty(ev,'keyCode',{value:13}); Object.defineProperty(ev,'which',{value:13}); ta.dispatchEvent(ev); } }`——与官方真实 Enter 完全一致（焦点也留在 textarea）；菜单关闭后 Tab 恢复默认（跳 + 号）。
+**佐证**：e2e-simtest：dispatch-Enter → `v:"/agent-teams "` 菜单关；click-option → `v:"/"` 菜单仍开。e2e-slashtab 全项 PASS：menuOpened/inserted/menuClosed/focusStayed 全 true。
+**补充**：composer 限高现状（官方已改）：官方 `.uV2eYG_scroll{max-height:var(--dsh-composer-text-max-height);overflow-y:auto}`、`.uV2eYG_input{height:100%}`（不再是固定 52px）+ 注入 `textarea.uV2eYG_input,.uV2eYG_input[data-phase="plain"],textarea[data-phase="plain"]{max-height:180px !important;overflow:hidden auto !important;min-height:56px !important}` 与 `.uV2eYG_grow,.uV2eYG_scroll{overflow:hidden !important}` 已生效：超长文本 180px 封顶 + 内部滚动（sh 964 / scrollTop 可设），双滚动条已消除。
