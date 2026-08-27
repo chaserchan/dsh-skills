@@ -627,3 +627,22 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 - 消息事件类型（渲染按此取字段）：`user/message`(data.content[].text)、`assistant/message`(data.message.content[].text+tool-use)、`tool/call`(data.name)、`step/end`、`turn/start`、`turn/end`(data.reason.kind)、`session/title`(data.title)；compaction/summary、*-chunks 流式块跳过；
 - 会话文件定位：`~/.dsh/sessions/<ws-slug>/<sessionId>/session.jsonl.zstd`，**id 在目录名**（文件恒叫 session.jsonl.zstd）；空/导入会话可能只有 header 一行（messages=0 正常）。
 **佐证**：scanZstdFrames+尾帧解码 → 52698 帧文件最后 2 帧解出 8 行（assistant/message/turn/end 等）；头 8 帧取到 title（"你把我规划下…"）；host `/cockpit/session-tail` 端点按此实现，单测通过。
+
+## 71. build-client.mjs 只拼接不做语法检查：JavaScript 语法错误会"成功构建"→ 页面 Failed to load plugins（2026-08-27 工作台设置样式实战）
+**现象**：改完 client.src.js 后 `node build-client.mjs` 输出 built 成功（无报错），但页面白屏显示 `Failed to load plugins ... bundle /plugins/dsh-cockpit/client.js loaded without registering "dsh-cockpit" via __ModuleLoader__.load`。
+**根因**：build-client.mjs 只是按标记拼接内联源码字符串（__VOICE_ENGINE__ 等），**不经过任何语法分析**；语法错误（如对象字面量键 `avatar.enabled: true` 没带引号 → Unexpected token '.'）被原样带进产出 bundle，加载阶段直接抛错 → 插件注册失败。页面"Failed to load plugins"是一个 **cafa8df4 加载器桩**（不是插件本身报错）。
+**正确姿势**：
+- 每次 build 后（或 build 前）先 `node --check client/src 文件` 验证语法（ESM 文件 check 兼容）；报错行号直接指向源码；
+- **对象字面量里带 `.` 的键必须引号**（`"avatar.enabled": true`），这是本次实测踩到的具体错误；
+- 若页面出现 "loaded without registering ... via __ModuleLoader__.load" → 第一时间就是 bundle 语法/运行时错误（先 node --check，再看 console）。
+**佐证**：node --check 报 `client.src.js:1606 SyntaxError: Unexpected token '.'`（`{ avatar.enabled: ... }[k]` 无引号键）；改为传入 DEFAULTS[k] 后语法 OK、重建成功、页面恢复。
+
+## 72. 官方设置页样式对齐：Setting-Cell 行结构（figma 501:30011）抄 LanguageRow.module.css 即可，别自绘 inline style 方程组（2026-08-27 实战）
+**现象**：自绘工作台设置页（inline style：fontSize 13、bg-layer-3、圆角 6、18px checkbox）与官方设置页（通用设置/模型）视觉割裂，用户报告"样式没有统一"。
+**根因**：官方设置行是统一 **Setting-Cell**（figma 501:30011，典型实现 `@deepseek-ai/dsh-client-locale` 的 LanguageRow.module.css）。
+**正确姿势**（实测对齐值）：
+- 结构：`.row{border-bottom:1px solid var(--dsw-alias-border-l2);align-items:center;gap:8px;padding:16px 0;display:flex}` + `.rowText{flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:48px;display:flex}`（左列 title+desc，右控件）；
+- 控件：`.selector{background:var(--dsw-alias-bg-module-platform);height:36px;border-radius:18px;padding:0 14px;font-size:14px;color:var(--dsw-alias-label-primary);display:inline-flex;border:none}`（**胶囊 select/按钮**，hover 用 `--dsw-alias-interactive-bg-hover`）；开关为 28px 圆形（官方 iconButton toggle）；
+- 值直接抄官方 CSS 变量（bg-module-platform 实测 rgb(16,22,38)），**不要**用 bg-layer-3/圆角 6 的自编参数；
+- 页面标题 14-15px/500-600 primary + 副标题 tertiary 13px。
+**佐证**：e2e 抓官方 LanguageRow computed style（selector 36px/18px/rgb(16,22,38)）→ 重写后 .dcp-ws-row 实测 rowPadY "14px 0px"、selector 36px/18px/rgb(16,22,38)、switch 28x28，截图观感与官方一致。
