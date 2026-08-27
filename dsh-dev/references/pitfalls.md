@@ -605,3 +605,25 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **佐证**：旧实例同页 `sessionCls:["hHd-Xa_newSession","YDXeBa_sessionRow",...]` + sessionRowAny:true → cockpit 全量挂载；新实例同页 `sessionCls:["hHd-Xa_newSession","nL4_yW_sessionLogButton"]` + sessionRowAny:false → 60s 超时跳过，bodyHead 开头"文件浏览/导出会话日志"。SVG className 坑：v1 脚本 `__err:"Uncaught"`，v2 改 getAttribute 后通过。插话坑：send 模式 `filled:"DCPSEND70186", afterVal:"", sentOnce:0` + "2 条排队消息"按钮。
 
 **已试无效**：点「打开侧边栏」按钮（此时 `_sessionRow` 立即出现）后 Page.reload → 页面仍恢复为侧边栏收起（第二次 apply 判非主界面跳过，但首次 apply 已成功挂载一次并打印全部注册日志）——展/收状态未随点击持久化（或持久化键不在 view|route|session|focus|mode 字面键中），reload 读回旧收起状态。恢复干净验证环境的最稳做法：同一浏览器会话内点开侧边栏后**立即**验证（不要再 reload），或直接清 localStorage 相关键。
+
+## 68. 官方 SnapshotSelectorHook（useSessions 等）是 React hooks：只能在组件渲染期调用，setInterval/回调里调用必挂（2026-08-27 战情室实战）
+**现象**：在 shell.overlay 组件里用 `useEffect(() => { setInterval(() => { const s = useSessions(...); }, 1000); })` 拿当前会话 id → 界面组件渲染了但状态永远是初始值/null，"⤢ 分屏"点了没反应（dispatch 的 id=null）。
+**根因**：`useSessions` / `useWorkspaces` 等 framework **SnapshotSelectorHook** 本质是 React hooks（内部依赖渲染调度/订阅器），**只允许在组件渲染期调用**（官方 AgentPresetLabel 就是渲染期 `useSessions((state) => state.byId[sessionId]?.agentPreset)`）。放进 setInterval/事件回调 = 违反 hooks 规则 → 静默失败/返回旧值。
+**正确姿势**：组件渲染期直接调用 `const cur = props.useSessions((st) => st && st.current || null)`（带 selector 取小字段）；store 变化时 framework 自动触发重渲染取新值，无需自建轮询。调用放 try/catch（拿不到返回 null）。
+**佐证**：e2e 改渲染期调用后：点击"⤢ 分屏"→ 当前会话自动加入分屏板（open:true / cards:1），useSessions.current 精确取到活跃会话 id。
+
+## 69. 官方 conversation.session.header.actions 对第三方晚注册条目不渲染（occupant 固定）；拿到活跃会话/全量快照的正路是 shell.overlay 的 useSessions（2026-08-27 战情室实战）
+**现象**：按官方 slot 文档注册 `ctx.slots.inject("conversation.session.header.actions", ...)` 打 log 成功，但动作区永远只有官方 2 个条目（agent-preset/job-list，`[class*="headerActions"]` kids:2），自己注册的按钮不出现。
+**根因**：header.actions 是 **session scope** list 槽，第三方 apply 时注入的 entry 不在已挂载会话的 ledger 里（时序/作用域），且官方渲染 `renderSlot("conversation.session.header.actions", {})` 只投影已声明的 occupants；官方 agent-preset 自己在会话初始化 effect 里注册（order:-10）才生效。
+**正确姿势**：要"当前会话 + 全量会话列表"快照 → 用 **shell.overlay**（scope root，standardProps 带 `useSessions`，已证实第三方可渲染，avatar 就挂这）：`useSessions` 返回 `{ids, byId, current(活跃会话!), phase, ...}`（SessionListState，字段在 dsh-client-runtime/lib/types/client/sessions/service.d.ts）。需要"每会话一个按钮/列表"的通用入口优先 overlay，别往 header/hero 的作用域槽里塞（第三方晚注册不保证渲染）。
+**佐证**：header.actions 注入 console 成功但 splitBtn false；改 overlay seat（id dcp-split-seat）后按钮渲染 + current 取值正确。
+
+## 70. DSH 会话日志 = 多帧 zstd 追加写：node:zlib 的 zstdDecompressSync 只解首帧，必须 scanZstdFrames 切帧逐帧解（2026-08-27 分屏板数据源实战）
+**现象**：`fs.readFileSync(session.jsonl.zstd)` 后 `zstdDecompressSync(buf)` 只解出 1 行（session header）；18MB 文件疑"只有 header"。`GET /api/session.export?sessionId=` 返回的是 **application/zip**（不是明文 jsonl，含 session.jsonl + media/ 目录）。~/.dsh/sessions 下 281 个会话全解出 1 行 → 误判"消息不落盘"。
+**根因**：DSH 的 JSONL 后端是**每批独立 zstd frame 追加写**（官方 dsh-session-persistence-jsonl/zstd.js，ZSTD_MAGIC=0x28B52FFD LE，带 checksum 帧）；Node 内置 zstdDecompressSync 只处理单个完整帧 → 多帧输入只输出第一帧。
+**正确姿势**：
+- 自己实现 `scanZstdFrames(buffer)`（官方同款：magic+frame descriptor 解析 frame header/block/checksum 边界，逻辑在 dsh-session-persistence-jsonl/lib/index.js L503-566，约 60 行可抄）→ 得到帧 range 数组 → 每帧 `zstdDecompressSync(subarray)` 拼接；
+- **性能**：尾部流式读取只解**最后 K 帧**（每帧一个追加批次，几 KB 级）+ 头部 8 帧取 session/title；别整文件解（18MB zstd → 数百 MB 明文）；
+- 消息事件类型（渲染按此取字段）：`user/message`(data.content[].text)、`assistant/message`(data.message.content[].text+tool-use)、`tool/call`(data.name)、`step/end`、`turn/start`、`turn/end`(data.reason.kind)、`session/title`(data.title)；compaction/summary、*-chunks 流式块跳过；
+- 会话文件定位：`~/.dsh/sessions/<ws-slug>/<sessionId>/session.jsonl.zstd`，**id 在目录名**（文件恒叫 session.jsonl.zstd）；空/导入会话可能只有 header 一行（messages=0 正常）。
+**佐证**：scanZstdFrames+尾帧解码 → 52698 帧文件最后 2 帧解出 8 行（assistant/message/turn/end 等）；头 8 帧取到 title（"你把我规划下…"）；host `/cockpit/session-tail` 端点按此实现，单测通过。
