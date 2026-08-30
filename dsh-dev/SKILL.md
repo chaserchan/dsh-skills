@@ -63,9 +63,12 @@ DSH 插件 = **双半区同包**：
 
 ### 第 5 步：验证（先 probe，不打扰运行中的 3080）
 
+**语法验证前置（强制）**：凡脚本/工具自动修改过代码（插入/替换/生成/bundle），改完立即 `node --check <产物>`（或 acorn parse）——语法不过禁止 build/部署/重启。此类事故历史上多次发生（脚本错找 `}` → 两函数嵌套错乱 → loader 全部 entry 不挂载），详见 pitfalls 78。
+
 ```sh
+node --check <插件目录>/client.js                  # 语法闸门，先于一切
 dsh --profile web --dump-config | grep <name>      # entry 在不在
-dsh --profile web --port 3110 --no-open            # 独立 probe
+dsh --profile web --port 3110 --no-open            # 独立 probe（影子启动，备独立 user-data-dir 更稳）
 Invoke-WebRequest http://127.0.0.1:3110/plugins/<id>/client.js   # 期望 200
 # 主页 HTML 的 __DSH_BOOT__ 应含该 id（带 inject 顺序与 immediately）
 ```
@@ -133,6 +136,7 @@ npm（显式 `--registry=https://registry.npmjs.org/`，bypass-2FA GAT）+ Gitee
 ## 参考资料
 
 - [references/architecture.md](references/architecture.md) —— 官方架构、功能→机制映射、本机安装结构速查
+- [references/host-api.md](references/host-api.md) —— 宿主 HTTP RPC API（编程式创建/重命名/归组会话、工作区管理、typert 信封，2026-08-30 实战打通）
 - [references/templates.md](references/templates.md) —— 插件工程模板（global-prompt 完整形态、client bundle 骨架、settings/slots/systemPrompt 代码骨架、patch）
 - [references/pitfalls.md](references/pitfalls.md) —— 踩坑库（含 media-capture `parentMatch=false` 全案例）
 - [references/release.md](references/release.md) —— 发布流程（npm / Gitee / GitHub / dshmarket 上架）
