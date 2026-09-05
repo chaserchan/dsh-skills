@@ -721,3 +721,29 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **验证三件套修正**：① `GET /plugins/<包名>/client.js` **只对带 dsh.client 的插件期望 200**，host-only 插件返回 404 是正确的；② `HTML 含 <包名>` 同理；③ 验证 host-only 插件用 `dump-config entry 在树` + 容器日志确认其 apply 函数跑过；④ **最权威**：`dcp-probe`（CDP 探针）确认 UI 完整渲染、模块系统 live、pendingQueue 空——这把"服务端 boot"和"浏览器侧加载"两件事并检一次。
 **踩坑教训**：开发 plugin 时不要乱猜默认配置——`dsh.client` 不是 bundle 自动送的，没 frontend 代码就别声明它；写 frontend 代码就必须声明，否则没人能 `__ModuleLoader__.load` 到你；这跟"host 工具型要不要前端按钮"的设计决策一一对应。
 **佐证**：wechat-devtools package.json:29-42 仅 `dsh.bundle.patch`，无 `dsh.client`；media-capture package.json 有 `dsh.client.inject: ["@deepseek-ai/dsh-client-runtime", "@deepseek-ai/dsh-client-ui-conversation"]`。两者经 socat 反向代理后端点响应一致地符合上述规则。
+
+## 82. dsh 一比一同步到影子：Docker 踩了 6 坑后切 WSL Ubuntu（2026-09-05 实战）
+**核心结论**：本机 ~/.dsh 同步到影子 dsh，**WSL Ubuntu 是正解**——Docker bind mount 跨 OS 边界、symlink/junction 透传、git-bash 路径转义假阴性、socat 时序、容器内 3080 启动失败……整套链路踩了 6+ 个坑。最终 WSL Ubuntu 一次跑通，因为：
+- WSL2 是 Linux 原生 fs（/mnt/c 访问宿主 Windows 盘符），无 symlink 跨平台污染
+- dsh 本地 npm-global 装 dsh@0.1.1-rc.1 + 全局平台依赖 197 个内置包（`/home/chaseman/.npm-global/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/`）
+- dsh 默认读 `~/.dsh` 不支持 env 覆盖？**不，DSH_HOME 支持**（`@deepseek-ai/dsh-home-paths` 的 `DSH_HOME` env），但嵌套 stdin pipe 模式下 export 不可靠——**直接把镜像放 `~/.dsh` 是最稳路径**
+
+**WSL 同步标准流程（可直接复用）**：
+1. **装 dsh**：`npm i -g pnpm@11 @deepseek-ai/dsh@<ver>`（registry 走 npmmirror）。注意：WSL 默认 prefix 是 `/home/chaseman/.npm-global`（自定义），不是 `/usr/local`；别去查 `/usr/local/lib/node_modules` 会 0 个包
+2. **同步本机 ~/.dsh**：`cp -r /mnt/c/Users/<user>/.dsh/. ~/.dsh/`（注意尾部 `/.` 复制隐藏文件）
+3. **改写 link/file: 路径**：`D:/job/developer/DSH/plugin/<x>` → `/home/chaseman/.dsh/plugin/<x>`（**绝对不能用 `/mnt/d/...`**，因为宿主 plugin 目录没有挂接产物，dsh 直接 import 会 ERR_MODULE_NOT_FOUND；必须先复制 plugin 源码到 WSL 本地再挂接）
+4. **修权限**：`chmod 600 ~/.dsh/.credentials.yaml`（dsh-credentials-local 强制要求 600，否则报 "readable beyond its owner"）
+5. **复制 plugin 源码 + 排除 node_modules**：`tar -C $SRC --exclude=node_modules --exclude=.git -cf - . | tar -C $DST -xf -`（`cp -r` 会原样带 Windows junction 变死 symlink）
+6. **平台依赖批量挂接**（同 #79 升级版）：枚举容器内 dsh 内置全部 197 个 @deepseek-ai/* 包，对每个 link 插件目录 `ln -sfn` 单例挂接——**不依赖 peerDependencies 声明**，因为 dsh-cockpit 之类的插件在 host 业务代码直接 import 平台包（不写在 package.json 里）
+7. **pnpm install 必加 CI=true**：WSL bash 非交互模式下 pnpm 默认拒绝删除 modules 目录，报 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`——`CI=true pnpm install --registry=https://registry.npmmirror.com`
+8. **dsh 0.0.0.0 安全锁 + 转发**：dsh 故意拒 `--host 0.0.0.0`，**用 Python TCP 转发脚本代替 socat**（WSL 没装 socat 且无 sudo）：`0.0.0.0:3081 → 127.0.0.1:3080`，零依赖
+9. **启动验证三件对齐**：dump-config entry 列表 / session.list items / attachments 文件数
+
+**WSL bash 踩坑（极其隐蔽，浪费 30+ 分钟）**：
+- **`wsl -d X -- bash -c 'script'` 通过 stdin pipe 调用时，脚本内 `for d in $(command)` 的 `$d` 全部是空字符串**——bash 4.4+ 的 stdin pipe 与 command substitution 冲突。`exec 0</dev/null` 无效。
+- **唯一稳定解法**：`wsl -d X -- bash << 'WSEOF' ... WSEOF`（git-bash heredoc 把脚本内容作为 stdin 喂 WSL bash，WSL bash 看到完整脚本作为 stdin——但 WSL 不会去解析 git-bash 的 WSEOF 标签，可能被 WSL bash 当作命令**）。实际验证发现 git-bash heredoc 喂 WSL bash 时，WSL bash 只收到部分内容（56 字节而非完整脚本）。
+- **最终稳定方案**：**git-bash 用 base64 编码脚本内容**，通过 `wsl -d X -- bash -c "echo 'B64' | base64 -d > /path/to/file && exec file"` 喂。stdin pipe 的内容会作为 bash -c 的 stdin（不被吃）但 echo + base64 -d 在 WSL 内部能完整接收。
+- **小坑**：WSL 默认 prefix 是 `/home/chaseman/.npm-global` 而非 `/usr/local`，第一次查 dsh 内置包会看到 0（路径查错），要去自定义 prefix 找。
+- **可观测**：dump-config 只看到 dsh-base/dsh-web-app = DSH_HOME 不生效（profile/web 没找到）；看到 entry 列表但 boot 崩 = 挂接没生效；boot 崩报 `Cannot find package '@deepseek-ai/schemastery'` = 平台依赖挂接缺失。
+
+**Why 切 WSL 而非坚持 Docker**：Docker 6 个坑（bind mount 跨 OS / Windows junction 透传 / git-bash 路径转义 / socat 时序 / 容器内 dsh 启动失败 / pnpm 链接失效）里至少 3 个无法在 Docker 架构层面解决。WSL 直接用 Linux fs，**镜像本质是数据 copy**而非容器层。WSL 启动 dsh = 直接 fork 一个 node 进程，无 namespace 隔离复杂度。
