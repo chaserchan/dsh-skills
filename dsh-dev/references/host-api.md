@@ -24,6 +24,10 @@
 | 端点 | payload | 返回 |
 |---|---|---|
 | `workspace.list` | `{}` | `{items:[{workspaceId,path,title,sessionIds}]}` |
+| `workspace.create` | `{path, title?}` | `{workspace:{workspaceId,path,title,sessionIds,createdAt,updatedAt}, created}`（title 缺省=path basename；新建独立工作区用它） |
+| `workspace.rename` | `{workspaceId, title}` | `{workspaceId,...}`（title 必须非空；改工作区标题用它） |
+
+> **中文 title/name 一律 Node UTF-8 发**（PowerShell Invoke-RestMethod 中文会 mojibake「工作台」→「å·¥ä½å°」，2026-09-05 实测踩坑）。
 
 - 存储：`~/.dsh/storages/workspace.json`（`tables.workspaces` = workspaceId → {path,title,sessionIds,createdAt,updatedAt}；`global.workspaceIds`=顺序；`global.archivedSessionIds`=归档集合）。
 - 服务方法（cordis 服务定义，`dsh-tool-cordis` 反射可见但 agent 工具未暴露）：`create(path,title?)`/`get(id)`/`list()`/`delete(id)`/`insertBefore`/`archiveSession`/`resolveByPath(path)`；Workspace 实体另有 `attachSession(id)`（对照 workspace.path 校验会话头 cwd，不匹配拒绝）、`detachSession`、`insertSessionBefore`、`sessionIds`、`status()`。
