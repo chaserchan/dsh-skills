@@ -702,3 +702,22 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **验证三连**：① 插件目录内 `node --input-type=module -e "import '@deepseek-ai/dsh-tools'"`（解析+导出可用）；② `node --check lib/index.js`（语法闸门，见 #78）；③ `dsh --profile web --dump-config` exit=0 且 entry 入树、`MODULE_NOT_FOUND|failed|duplicate|pending` 零命中。
 **佐证**：修复前 boot 崩（ERR_MODULE_NOT_FOUND stack）；`pnpm add 0.1.1-rc.1` 后 resolved OK（defineTool: function）、syntax OK、dump-config exit=0 + `# == dsh-wechat-devtools / - id: wechat-devtools` 入树。
 **教训**：link 插件首次装载就 boot 崩且报 `Cannot find package '@deepseek-ai/*'`，第一反应不是查 profile 注册，而是查插件目录有没有 node_modules；平台依赖的版本锚点是宿主内置版本，不是 npm latest。
+
+
+## 80. dsh web app 故意拒 `--host 0.0.0.0`：产品级安全锁，容器场景用 socat 反向代理绕过（2026-09-05 dsh-shadow 实战）
+**现象**：Docker 影子环境启动后，宿主 `curl http://127.0.0.1:3110/` 返回 000（连接失败），但 `docker ps` 显示端口映射 `0.0.0.0:3110->3080/tcp` 正常，容器内 `dsh web: http://127.0.0.1:3080` 正常启动。容器内 `/proc/net/tcp` 显示 `0100007F:0C08` = 127.0.0.1:3080 监听。
+**根因（官方明示）**：dsh web app 内置 `--host` 选项但**对 `0.0.0.0` 显式拒绝**：`error: --host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead`。这是产品级安全锁（startup.js + index.js 中的 `ALL_INTERFACES_HOST` 常量与拒绝逻辑），**不能视为 bug 绕过去**——强行绕过等于把 RCE 能力暴露给网络。
+**真正解法（socat 容器内反向代理）**：容器内 socat 监听 `0.0.0.0:3081`，转发到 `127.0.0.1:3080`；Docker 把宿主 `3110` 映射到容器 `3081`。流量路径：宿主 → socat(3081) → dsh(127.0.0.1:3080)。dsh 全程不接触 eth0，安全锁不破。
+**compose 语法坑**：`ports: "127.0.0.1:3110:127.0.0.1:3080"` 看起来很美但 Docker compose v2 报 `invalid IP address: 127.0.0.1:3110`——`ports` 字段只接受 `[HOST_IP:][HOST_PORT:]CONTAINER_PORT[:MODE]`，第 4 段是协议模式（如 tcp）不是 IP。无法用 docker compose 表达"容器内目标=127.0.0.1"，必须靠应用层（socat/iptables）解决。
+**最小可复用方案**：① Dockerfile 加 `apt-get install -y --no-install-recommends socat`；② entrypoint 启 `socat TCP-LISTEN:3081,reuseaddr,fork,bind=0.0.0.0 TCP:127.0.0.1:3080 &` 再 exec dsh；③ compose ports 用 `"3110:3081"`。`reuseaddr,fork` 是关键——前者避 TIME_WAIT 串号，后者让多客户端连接并行（fork 出子进程处理每个连接，父进程继续监听）。
+**佐证**：宿主 3110 000 → `socat` 启后 → 200（14772B HTML）。容器内 `ss -tlnp` 验证两个端口：dsh 3080 loopback + socat 3081 0.0.0.0。
+**教训**：凡 dsh web app 想暴露非本地网络，先想"安全锁兼容的边界代理"而非"绕 host 检查"；dsh 用 `--host 0.0.0.0` 直接报错**不是 bug**，是设计意图，绕过去就是合规事故。
+
+## 81. dsh 插件有 dsh.client.inject ≠ 有 dsh.client.tools：验证三件套要按声明分项（2026-09-05 wechat-devtools vs media-capture 实战）
+**现象**：影子验证 wechat-devtools 报 `client.js → 404`，入口 HTML 不含 entry id；以为 boot 失败。媒体-capture 替换后 `client.js → 200`，HTML 含 entry。同一个验证流程对不同插件结论相反。
+**根因**：dsh 插件的 `dsh` 字段有两条独立声明路径——`dsh.bundle`（host 侧 cordis 加载，决定 backend 行为）+ `dsh.client`（浏览器侧加载，决定前端 boot 图）。前者必带（不声明则无法 bundle 安装），后者**完全可选**。
+- 仅 host 工具型插件（如 dsh-wechat-devtools，host 侧 `spawnMcp` + `tools.register`）：声明 `dsh.bundle`，**不**声明 `dsh.client` → **无 client.js、无 HTML entry**（这是设计！插件没前端代码）。HTML 的 `__DSH_BOOT__` 只列带 `dsh.client` 的包。
+- 完整 UI 插件（如 dsh-media-capture，host 端仅少量配置 + 浏览器端相机按钮 React 组件）：声明 `dsh.bundle` + `dsh.client` → 有 client.js + HTML entry。
+**验证三件套修正**：① `GET /plugins/<包名>/client.js` **只对带 dsh.client 的插件期望 200**，host-only 插件返回 404 是正确的；② `HTML 含 <包名>` 同理；③ 验证 host-only 插件用 `dump-config entry 在树` + 容器日志确认其 apply 函数跑过；④ **最权威**：`dcp-probe`（CDP 探针）确认 UI 完整渲染、模块系统 live、pendingQueue 空——这把"服务端 boot"和"浏览器侧加载"两件事并检一次。
+**踩坑教训**：开发 plugin 时不要乱猜默认配置——`dsh.client` 不是 bundle 自动送的，没 frontend 代码就别声明它；写 frontend 代码就必须声明，否则没人能 `__ModuleLoader__.load` 到你；这跟"host 工具型要不要前端按钮"的设计决策一一对应。
+**佐证**：wechat-devtools package.json:29-42 仅 `dsh.bundle.patch`，无 `dsh.client`；media-capture package.json 有 `dsh.client.inject: ["@deepseek-ai/dsh-client-runtime", "@deepseek-ai/dsh-client-ui-conversation"]`。两者经 socat 反向代理后端点响应一致地符合上述规则。
