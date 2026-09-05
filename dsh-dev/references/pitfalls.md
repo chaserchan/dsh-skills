@@ -687,3 +687,18 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **根因**：官方权限按钮（Sh0Q9G_trigger 类）是**反直觉的透明**：`background:transparent; border:none; height:28px; font-size:13px; line-height:20px; padding:0 4px 0 8px; color:var(--dsw-alias-label-secondary); border-radius:24px; display:flex; gap:4px` ——**底色也是"透明度"而非颜色变量**；我用了"正式 selector 设计"（胶囊底）→ 与工具栏 flat 风格冲突。
 **正确做法**：并排控件**先取对方 computed 逐值复刻**（写取证脚本：computed 对比 background/border/radius/height/font/padding/color/gap/display），同构后再提交；"样式用 alias 变量"只保证主题跟随，**不保证同构**（背景变量同样会画底）。
 **佐证**：取证脚本输出 select vs perm：修复前 select bg=rgb(53,54,56)（有底）/perm transparent；修复后逐值一致（transparent/border none/24px/28px/13px/0 4px 0 8px/rgb(207,211,214)/gap 4/flex），双态截图（dcp-busyselect-dark/light.png）视觉并排无差异。
+
+## 78. 脚本自动改码必须过语法验证闭环：插入脚本错找 `}` → 两函数嵌套错乱 → loader 53 entry 全挂（2026-08-29 dsh-cockpit 实战，此类事故历史上多次）
+**现象**：用 insert-mountcontrol.mjs 脚本把 mountControlRoom（239 行）自动插入 client.src.js，build 后浏览器端**所有插件**报 "loaded without registering"（53 entry 全栈失败），控制室/avatar/mountPanels 全不挂载。
+**排查弯路（勿重复）**：先疑 rev 缓存（实为内容 hash 一致，排除）→ 再疑环境问题（"53 entry 共性失败"实为**一个文件的语法错连累整个 loader**，不是多插件环境病）→ 又疑 V8 长源解析边界（V8 没有"文件长就解析失败"的病）。真凶定位靠 **acorn 二分定位 + `node --check`**：insert 脚本正则找 mountPanels 的闭合 `}` 时匹配到函数体内嵌套块的 `}`，mountControlRoom 整体插进了 mountPanels 体内 → 两函数嵌套错乱 → 源码本身语法非法（client.src.js 与产物同样报错，证明是源的错不是 build 的错）。
+**正确姿势（四步验证链，强制）**：① 凡脚本/工具自动修改代码（插入/替换/生成/bundle），改完立即 `node --check` 或 acorn parse 验证语法，不过不许 build/部署；② 语法通过≠能用——影子启动验证（备用端口+独立 user-data-dir）确认 `__DSH_BOOT__` 含 entry、console 无 registering 报错，才许动生产；③ 生产重启前备份 patch+client（带时间戳）+ 写好 `disabled: true` 回退步骤；④ 排错方法论：报错位置不动=病灶在更前面（未闭合结构）；多 entry 同时失败=查公共 loader 入口而非逐个插件；node --check 比浏览器 console 精确；源文件与产物分开 check。
+**佐证**：`node --check` 报 L2494 `Unexpected token 'function'`，改 const 后同位置报 `Unexpected token 'const'`（位置不动=病灶在前）；acorn 二分：注释 0..L1798→FAIL@2435、0..L1799→FAIL@2030（两函数体内都错位）。
+**教训**：无验证的自动化比手工更危险——脚本改码必须语法验证闭环；"多插件共性失败"先怀疑最近改动的那一个文件，别急着归咎环境。
+
+## 79. link 本地插件平台依赖未装 → boot 崩 ERR_MODULE_NOT_FOUND：插件目录必须自带精确宿主同版 node_modules（2026-09-05 dsh-wechat-devtools 实战）
+**现象**：新装的 link 插件 dsh-wechat-devtools 让整个 `dsh --profile web` boot 崩：`failed to import loader entry wechat-devtools (dsh-wechat-devtools): Cannot find package '@deepseek-ai/dsh-tools' imported from D:\...\dsh-wechat-devtools\lib\index.js`（ERR_MODULE_NOT_FOUND）。
+**根因**：`dsh plugin add <目录>`（link 方式）不装依赖（见反面清单）；插件 `lib/index.js` 里 `import { defineTool } from '@deepseek-ai/dsh-tools'`，而 ESM 解析从插件**真实路径**（`D:\job\developer\DSH\plugin\...`）向上找 node_modules，永远碰不到 profile（`C:\Users\...\.dsh\profiles\web`）与全局 dsh 的 node_modules——peer 语义"宿主提供"在 link 插件上不成立，插件目录必须自带实体。对照：cockpit/media-capture 等 link 插件能跑是因为 host 侧不 import 平台包（client 侧走 `__ModuleLoader__` 运行时注入）。
+**解法**：插件目录 `pnpm add @deepseek-ai/dsh-tools@<宿主内置精确版本> --save-exact`。宿主版本查 `~/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/package.json`（本次为 0.1.1-rc.1，npm 上有精确同版）。**不要**留 range 让 pnpm 自动解析——peer range `>=0.1.0-rc.6 <0.2.0` 会解析到 0.1.2-rc.1（比宿主新的平台 API，有漂移风险）。同版副本双实例无碍：registry 插件（agent-teams 等）本就是 pnpm auto-install-peers 的副本实例模式在跑。
+**验证三连**：① 插件目录内 `node --input-type=module -e "import '@deepseek-ai/dsh-tools'"`（解析+导出可用）；② `node --check lib/index.js`（语法闸门，见 #78）；③ `dsh --profile web --dump-config` exit=0 且 entry 入树、`MODULE_NOT_FOUND|failed|duplicate|pending` 零命中。
+**佐证**：修复前 boot 崩（ERR_MODULE_NOT_FOUND stack）；`pnpm add 0.1.1-rc.1` 后 resolved OK（defineTool: function）、syntax OK、dump-config exit=0 + `# == dsh-wechat-devtools / - id: wechat-devtools` 入树。
+**教训**：link 插件首次装载就 boot 崩且报 `Cannot find package '@deepseek-ai/*'`，第一反应不是查 profile 注册，而是查插件目录有没有 node_modules；平台依赖的版本锚点是宿主内置版本，不是 npm latest。
