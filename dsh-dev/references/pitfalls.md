@@ -771,3 +771,11 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **公开来源**：[旧版 descriptor v2](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.1-rc.1/packages/subagent/subagent/src/descriptor.ts#L47)、[中间版本拒绝旧 descriptor](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.2-rc.1/packages/subagent/subagent/src/descriptor.ts#L210)、[目标迁移校验](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.5-rc.1/packages/session/session-format-v0-to-v1/src/validation.ts#L198)、[旧版合法 origin 字段](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.1-rc.1/packages/interaction/permission-presets/src/index.ts#L49)、[目标允许字段](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.5-rc.1/packages/session/session-format-v0-to-v1/src/dispositions.ts#L76)。
 
 **已验证兼容升级（后续验收）**：用户明确主会话历史完整优先后，本机采用官方 `0.1.2-rc.1`，这是本次最高已验证兼容的 RC，不称为 latest；`0.1.5-rc.1` 未用于生产。460 条原本可读的主记录已由新读取器完整读取，规范化全事件 hash 与旧格式 codec 一致（活动记录停写后另验）；1 条既存记录序号异常在新旧读取器中均被拒绝，原件保留，未修复。213 个内置 DSH 组件统一为 `0.1.2-rc.1`；两个插件兼容补丁通过原生 pnpm patch / patch-commit 与 patchedDependencies 持久化。schema、path 等辅助依赖可按各包声明保留不同版本，不等同于混装旧 DSH SDK 服务。正式首次冷启动与页面验收已通过；补丁持久化登记后的第二次冷重启被自动审批阻拦，不能记为通过。
+
+### 85. 升级后侧栏用户/退出图标发黑、挤成一排（2026-09-10）
+
+**根因**：原生设置入口增加了横向 triggerRow，插件仍将按钮插入 settings.parentElement，三个入口互相挤压，继而被 width < 100 的逻辑误判为折叠、隐藏文字。只移到 sidebar.settings 的父 settingsArea 仍不够：该层在侧栏收起时也是横排；再上一级 footArea 才始终纵排。插件还将首次 getComputedStyle(settings).color 写入 inline style，后续主题加载或切换不会刷新它，覆盖了已有主题变量。
+
+**最小修复**：优先通过 data-slot=settings.trigger 查找按钮，通过 data-slot=sidebar.settings 定位 settingsArea，将用户入口插在 footArea 中、settingsArea 之前；保留 CSS 主题变量，不固定采样颜色。盒模型同步立即执行并随折叠状态更新，图标尺寸与设置一致，隐藏文字时保留 title/aria-label。不要改官方容器布局或删除插件。
+
+**验证与部署边界**：用真实 footer DOM/CSS 与实际插件函数隔离复现，覆盖宽栏/收起、明暗切换及主题延迟加载、重复注入；只测初始深色页面不足以抓住固定色回归。gate.js 由插件 serveFile 逐请求读取并返回 no-store，源目录与 profile 安装副本可能不同，必须核对实际 HTTP 文件哈希；前端文件同步后刷新即可，无需重启运行中的主会话。
