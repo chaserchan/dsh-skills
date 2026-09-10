@@ -757,3 +757,15 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **最小验收**：旧包应能复现 pending；修复包用真实 Cordis 执行完整 bundle，验证从 `PENDING / 0 slots` 变为 `ACTIVE / 5 slots`。检查旧/新图片 API、服务延迟出现、this 与参数及拒绝传播。再清除浏览器临时资源覆盖，刷新正式 HTTP 资源，核对文件哈希、启动错误消失和主界面呈现。HTTP 200、标题或源码/类型正则都不足以证明浏览器插件激活；未执行的订阅请求与付费生图须明确留作未验收。
 
 **公开来源**：[v1.13.1 旧 API](https://github.com/WSL043/dsh-codex-subscription/blob/v1.13.1/src/client.jsx#L1374)、[v1.14.0 强制依赖](https://github.com/WSL043/dsh-codex-subscription/blob/v1.14.0/src/client.jsx#L53)、[新图片 API](https://github.com/WSL043/dsh-codex-subscription/blob/v1.14.0/src/client.jsx#L1235)、[v1.14.4 契约测试](https://github.com/WSL043/dsh-codex-subscription/blob/v1.14.4/tests/client-contract.test.mjs#L11)、[HTTP 验收边界](https://github.com/WSL043/dsh-codex-subscription/blob/v1.14.4/.github/scripts/accept-official-release.ps1#L113)。
+
+## 84. DSH 升级须独立验收历史正文：descriptor 与事件字段迁移缺口（2026-09-10）
+
+**已证实的迁移边界**：DSH 0.1.1-rc.1 会合法写入 format v0、subagent descriptor v2，以及 permission/preset 的 origin 字段；0.1.5-rc.1 的 v0→v1 校验器只接受 descriptor v3，并把 permission/preset 限定为 preset 字段。0.1.2-rc.1 改变后续写入，没有把上述已存记录转换到新契约，不能当作补迁移的桥梁。Session 格式版本与 descriptor 版本是两个层次，直接改大版本号、删字段或追加 descriptor 不等于保留身份和语义的迁移。
+
+**一次本地审计，数量不可泛化**：611 个旧会话的元数据中有 150 个子会话含 descriptor v2。使用目标官方 JsonlSessionPersistence 的 read 模式逐一 open、read(0,1)、close，结果为 610 个拒绝、1 个通过；按首个错误分组为 origin 276、未知 session/imported 215、descriptor v2 119。另 31 个含 descriptor v2 的子会话先被 origin 拒绝，所以字段分布不等于首错分组，也不能声称只有 150 个子会话受影响。session/imported 的产生来源尚未证实，不归因于官方旧版。该轮源文件大小和 mtime 均未变化；本次生产未切换。
+
+**验收分开做**：Web boot、插件激活、会话列表和历史正文读取是独立门槛。列表能显示不代表 session/page 能打开；先备份，再用目标官方读取器只读核查实际历史格式，并用正确的主/子会话地址验证正文 API。报告区分元数据分布、首错数量、正文读取和未测业务，不把一次 page 或一条记录通过写成全部历史/续跑通过。发生官方拒绝时保留原件和旧环境；用户尚未明确接受历史可读性变化前，不切换生产，不自行补写迁移器或改动原始日志。
+
+**Windows 隔离要点**：复制前盘点 junction/reparse point，明确跳过或重建链接，避免递归跟随形成复制循环；pnpm 文件可能与生产及 store 共用 hardlink，改 probe 前用同目录新文件加 rename 替换并核对原件哈希。link: 插件按外部 realpath 解析依赖，profile fallback 不一定可达，须核对其直接依赖；不同卷的目录移动不能当作原子切换。
+
+**公开来源**：[旧版 descriptor v2](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.1-rc.1/packages/subagent/subagent/src/descriptor.ts#L47)、[中间版本拒绝旧 descriptor](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.2-rc.1/packages/subagent/subagent/src/descriptor.ts#L210)、[目标迁移校验](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.5-rc.1/packages/session/session-format-v0-to-v1/src/validation.ts#L198)、[旧版合法 origin 字段](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.1-rc.1/packages/interaction/permission-presets/src/index.ts#L49)、[目标允许字段](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.5-rc.1/packages/session/session-format-v0-to-v1/src/dispositions.ts#L76)。
