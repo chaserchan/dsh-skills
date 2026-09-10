@@ -747,3 +747,13 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 - **可观测**：dump-config 只看到 dsh-base/dsh-web-app = DSH_HOME 不生效（profile/web 没找到）；看到 entry 列表但 boot 崩 = 挂接没生效；boot 崩报 `Cannot find package '@deepseek-ai/schemastery'` = 平台依赖挂接缺失。
 
 **Why 切 WSL 而非坚持 Docker**：Docker 6 个坑（bind mount 跨 OS / Windows junction 透传 / git-bash 路径转义 / socat 时序 / 容器内 dsh 启动失败 / pnpm 链接失效）里至少 3 个无法在 Docker 架构层面解决。WSL 直接用 Linux fs，**镜像本质是数据 copy**而非容器层。WSL 启动 dsh = 直接 fork 一个 node 进程，无 namespace 隔离复杂度。
+
+## 83. 订阅插件强依赖新版 uiConversation 使旧 DSH 前端 pending：用真实激活与新旧图片 API 回归验证（2026-09-10）
+
+**现象与根因**：`dsh-codex-subscription@1.14.4` 在旧 DSH UI 组件 `0.1.1-rc.2` 上报告 `pending (waiting for service: uiConversation)`。v1.13.1 使用 `conversation.resolveImage`；v1.14.0 将 `uiConversation` 加入强制 inject 并改用 `imageUrl`。旧宿主没有该服务，插件 apply 不执行，前端启动检查失败。CLI 的版本号不能代替各组件实际版本及运行时服务图。
+
+**最小兼容修复**：保留插件，移除 `uiConversation` 的强制 inject 和启动时提前捕获；实际读图时使用 `ctx.get('uiConversation')?.imageUrl(sessionId, attachment) ?? conversation.resolveImage(sessionId, attachment)`。新 API 的 Promise 拒绝必须向上传递，不能捕获后改走旧接口绕过授权错误。发行包内的局部修复会被重装/升级覆盖，应在兼容版本替换时重跑检查。
+
+**最小验收**：旧包应能复现 pending；修复包用真实 Cordis 执行完整 bundle，验证从 `PENDING / 0 slots` 变为 `ACTIVE / 5 slots`。检查旧/新图片 API、服务延迟出现、this 与参数及拒绝传播。再清除浏览器临时资源覆盖，刷新正式 HTTP 资源，核对文件哈希、启动错误消失和主界面呈现。HTTP 200、标题或源码/类型正则都不足以证明浏览器插件激活；未执行的订阅请求与付费生图须明确留作未验收。
+
+**公开来源**：[v1.13.1 旧 API](https://github.com/WSL043/dsh-codex-subscription/blob/v1.13.1/src/client.jsx#L1374)、[v1.14.0 强制依赖](https://github.com/WSL043/dsh-codex-subscription/blob/v1.14.0/src/client.jsx#L53)、[新图片 API](https://github.com/WSL043/dsh-codex-subscription/blob/v1.14.0/src/client.jsx#L1235)、[v1.14.4 契约测试](https://github.com/WSL043/dsh-codex-subscription/blob/v1.14.4/tests/client-contract.test.mjs#L11)、[HTTP 验收边界](https://github.com/WSL043/dsh-codex-subscription/blob/v1.14.4/.github/scripts/accept-official-release.ps1#L113)。
