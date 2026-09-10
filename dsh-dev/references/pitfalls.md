@@ -779,3 +779,13 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **最小修复**：优先通过 data-slot=settings.trigger 查找按钮，通过 data-slot=sidebar.settings 定位 settingsArea，将用户入口插在 footArea 中、settingsArea 之前；保留 CSS 主题变量，不固定采样颜色。盒模型同步立即执行并随折叠状态更新，图标尺寸与设置一致，隐藏文字时保留 title/aria-label。不要改官方容器布局或删除插件。
 
 **验证与部署边界**：用真实 footer DOM/CSS 与实际插件函数隔离复现，覆盖宽栏/收起、明暗切换及主题延迟加载、重复注入；只测初始深色页面不足以抓住固定色回归。gate.js 由插件 serveFile 逐请求读取并返回 no-store，源目录与 profile 安装副本可能不同，必须核对实际 HTTP 文件哈希；前端文件同步后刷新即可，无需重启运行中的主会话。
+
+### 86. 市场更新被只读清单和版本限定补丁阻断；更新成功也不等于已激活（2026-09-10）
+
+**真实错误**：pnpm 原子替换 package.json 遇 Windows ReadOnly 会报 EPERM rename；将安装清单设为只读与正常插件更新冲突，.gitignore 也不阻止程序写入。版本限定 patchedDependencies 在插件升版后可能没有匹配对象，pnpm 报 ERR_PNPM_UNUSED_PATCH；调用栈尾部不足以判断为下载失败或补丁文本损坏。Market 还可能执行旧版回滚，需区分首个更新失败与回滚结果。
+
+**已验证方案**：备份清单、lockfile、workspace、旧插件和属性，再允许安装器写入清单。global-prompt 0.1.3 仍需 client-store/getSnapshot 两行修复；其原补丁内容可用包名选择器 dsh-plugin-global-prompt 登记，避免仅版本变动造成 UNUSED。pnpm 11.22.0 对普通依赖的补丁应用失败仍抛 PATCH_FAILED；不启用 allowUnusedPatches 或忽略应用失败，不承诺未来任意版本语义兼容。
+
+**新增 bundle 的迁移**：global-prompt 0.1.3 新增 dsh.bundle.patch；官方 CLI 会将已有依赖中新出现的 bundle 追加到 profile stack。旧 profile 同 ID 手工 insert 必须迁移，保留 bundle 唯一启用；如有用户 config，应保留为同 ID 普通覆盖。--dump-config 可以 exit 0 仍输出重复 ID，不能单凭退出码验收。
+
+**激活边界**：npm 更新后已加载的 host 模块可能留在 Node 缓存；Market toggle 不等于刷新代码。官方客户端 HMR 会自动重载 client，不手动刷新也不能避免新 client 配旧 host。没有已验证公开单插件代码重载路径时，先确认运行状态、安排保存/停机窗口，再安装和冷启动验收。升级探针需真实检查设置保存后再切页，以及后台/客户端契约，不能把安装成功、页面打开或离线模型准备通过写成 OAuth/实际推理流已验证。
