@@ -789,3 +789,39 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **新增 bundle 的迁移**：global-prompt 0.1.3 新增 dsh.bundle.patch；官方 CLI 会将已有依赖中新出现的 bundle 追加到 profile stack。旧 profile 同 ID 手工 insert 必须迁移，保留 bundle 唯一启用；如有用户 config，应保留为同 ID 普通覆盖。--dump-config 可以 exit 0 仍输出重复 ID，不能单凭退出码验收。
 
 **激活边界**：npm 更新后已加载的 host 模块可能留在 Node 缓存；Market toggle 不等于刷新代码。官方客户端 HMR 会自动重载 client，不手动刷新也不能避免新 client 配旧 host。没有已验证公开单插件代码重载路径时，先确认运行状态、安排保存/停机窗口，再安装和冷启动验收。升级探针需真实检查设置保存后再切页，以及后台/客户端契约，不能把安装成功、页面打开或离线模型准备通过写成 OAuth/实际推理流已验证。
+
+### 87. 自建 Node 反向代理给 DSH 注入启动令牌：透传 transfer-encoding 会损坏响应体（dsh.chaseman.cn 域名接入实战）
+
+**现象**：裸域名首访 `303` + `Set-Cookie dsh-auth-…` 正常、后续拿到 `200` 首页，但页面报 `Failed to load plugins` / `failed to import loader entry … bundle script /plugins/??@deepseek-ai/…`，URL 里还出现看似畸形的 `??` 多入口路径，极易误判为代理拼错了 URL。
+
+**排查纠偏**：`/plugins/??a/client.js,b/client.js&rev=…` 是 **Vite 合法的多入口（glob）形式**，直连与代理都返回 `200`，不是畸形 URL。判断代理是否损坏内容，唯一可靠办法是**同一 URL 做直连 vs 经代理的字节级对比**（长度 + 全等），「首页能打开/返回 200」完全不足以判定。
+
+**根因**：代理用 `node:http` 转发时把上游响应头整体 `writeHead` 透传，含 `transfer-encoding: chunked` 与 `connection` / `keep-alive`；Node 的 `ServerResponse` 自身也决定分块编码，两者冲突导致响应体边界错乱/截断 → 浏览器拿到的 JS 损坏 → 前端报插件加载失败。另有一个早期版本**删掉请求头 `accept-encoding`** 想规避压缩问题，反而制造「上游未压缩却声称压缩」的更坏组合（旧版问题）。
+
+**解法**：转发响应头前删除 `transfer-encoding`、`connection`、`keep-alive`；`content-length`、`content-encoding` 原样保留；**请求头一律不动**（不做 accept-encoding 手术）。
+
+**可复算验收**：取首页 HTML 中那个 **53 入口、约 4.79 MB** 的合并包 URL，分别请求 `http://127.0.0.1:3080<url>`（直连）与 `https://<域名><url>`（经代理），**长度相同且内容全等**才算修好（本次实测 4792766 字符、`内容一致: True`）。
+
+**背景约束（同源坑）**：DSH 页面鉴权只认 `GET /?token=<launchToken>` 铸的 `dsh-auth-<sha256(authority)>` cookie（`Max-Age=2592000`，HttpOnly + SameSite=Strict，签名密钥跨重启持久）；`--trusted-host` 只放宽 `/api` 的浏览器信任栅栏，**对页面鉴权无豁免** → 裸域名首访必 401，这正是需要"注入令牌代理"的原因，不能指望 `--trusted-host` 解决。`dsh web app` 亦明确拒绝 `--host 0.0.0.0`（见第 80 条）。
+
+### 88. DSH 客户端插件加"移动端下拉刷新"：用官方 connection.reconnect()，附四个验收坑（dsh-cockpit 实战）
+
+**需求落点**：手机端下拉 → **拉最新消息 + 重连**（不整页 reload）。DSH 是 SPA，`location.reload()` 会断 WebSocket、丢流式输出与输入框内容，**不要**用整页重载来实现"下拉刷新"。
+
+**官方已内置，不要自研**：`dsh-client-connection` 在客户端挂载 `ctx.connection`，其 `reconnect()` 语义就是"重置重试进度 + 立即替换当前尝试"；重连后 DSH 自行 resync（官方 `connection/reset` 事件注释原文：*Wire-derived caches must repull*）。所以下拉刷新 = 手势 + 一次 `ctx.connection.reconnect()`，外加 `ctx.connection.state.getSnapshot()`（`connected`/`connecting`/`disconnected`）等结果即可，**不需要自己写重连/重拉逻辑**。
+
+**必须先声明 inject**：客户端插件要访问 `ctx.connection`，必须在 `exports.inject` 数组里加 `"connection"`（cordis 服务名）。已有 inject 为 `["slots","locale","settingsScope","theme","sessions","conversation","conversationEvents"]` 的插件不加就直接拿不到该服务。代码仍应做存在性兜底（缺失时降级 `location.reload()`），避免版本差异导致新功能静默失效。
+
+**手势实现要点**：只在 `matchMedia("(pointer: coarse)")` + `ontouchstart` 时接管（桌面鼠标/触控板完全不介入）；`touchstart` 时用 `atTop(e.target)` 判定——**从 target 向上找第一个 `overflowY: auto|scroll` 且 `scrollHeight > clientHeight` 的祖先**，其 `scrollTop > 0` 即不接管（DSH 消息区不是 window 滚动，只看 `window.scrollY` 会误判）；`input/textarea/[contenteditable]` 内的下拉让位给原生；`touchmove` 需 `{passive:false}` 才能 `preventDefault` 接管橡皮筋。
+
+**验收坑 1（Playwright）**：`page.evaluate(fn)` **不接受模块作用域的函数引用**（报 `ReferenceError: xxx is not defined`），要用字符串表达式；而 `page.evaluate(str)` 只按**表达式**解析，传入 `function foo(){}` 声明会报 `Unexpected token ';'`，必须包成 `"(function(){" + src + "})()"`。
+
+**验收坑 2（坐标命中）**：CDP `Input.dispatchTouchEvent` 的坐标命中必须先用 `document.elementFromPoint(x,y)` 自检。本次负例曾"假失败"：一个 `position:fixed; z-index:2147483000` 的自造滚动容器，实际因 **DSH 祖先的 transform 改变了 fixed 定位基准**而落在别处，触摸命中的是登录卡片 → 误判为"实现漏判滚动容器"。改为读 `getBoundingClientRect()` 实测坐标后再派发即通过。**坐标类验收的失败先怀疑取点，别急着改实现。**
+
+**验收坑 3（登录门禁）**：装了 `dsh-user-system` 的实例，headless 打开会停在登录页，而 cockpit 类插件的 apply 守卫会按设计跳过非主界面（判据含"登录后进入"文案 + `[class*=_sessionRow]`）→ 插件日志一条都没有。此时**不要**改产品守卫，改用隔离验收：从 `client.src.js` 用**跳过字符串/注释的括号匹配**提取目标函数源码，`page.evaluate` 注入 + mock `ctx`（`effect` 要按 cordis 语义"调用外层函数并保存返回的 disposer"），再用**真实 CDP 触摸事件**验证手势/阈值/指示器/调用次数与负例。
+
+**验收坑 4（体积比对）**：比较构建产物大小时别把**字符数**当**字节数**（中文 UTF-8 占 3 字节），否则会误判"产物变小=覆盖了手工改动"。判断产物是否被正确重建，直接看关键字符串是否存在（`mountPullToRefresh`、`"connection"]`）比看体积可靠。
+
+**隐藏坑（目录结构）**：`~/.dsh/profiles/web/node_modules/<plugin>` 常是指向插件源码目录的 **Junction**（改源码即生效、无需复制，前端口 bundle 由插件 serveFile 逐请求读取，前端文件同步后刷新即可，不必重启主会话）；但该 junction 与源目录里的 `node_modules` 形成**自引用循环**，对插件目录做 `Get-ChildItem -Recurse` / 打包 / 备份会**无限套娃**，务必排除 `node_modules`。
+
+**本次验收证据**：375×812 + `hasTouch/isMobile` 真实 Edge，下拉 40px(<阈值64) 显示"下拉刷新"、110px 显示"松手刷新"且 armed；松手后 `reconnect` 调用计数 = 1、文案"刷新中…"、随后收起复位；负例（input 内下拉、滚动容器 `scrollTop=185` 处下拉）均不接管、调用计数 0。
