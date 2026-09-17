@@ -825,3 +825,52 @@ ctx.slots.inject(conversation.chat.turnTail, () => ctx.slots.register({
 **隐藏坑（目录结构）**：`~/.dsh/profiles/web/node_modules/<plugin>` 常是指向插件源码目录的 **Junction**（改源码即生效、无需复制，前端口 bundle 由插件 serveFile 逐请求读取，前端文件同步后刷新即可，不必重启主会话）；但该 junction 与源目录里的 `node_modules` 形成**自引用循环**，对插件目录做 `Get-ChildItem -Recurse` / 打包 / 备份会**无限套娃**，务必排除 `node_modules`。
 
 **本次验收证据**：375×812 + `hasTouch/isMobile` 真实 Edge，下拉 40px(<阈值64) 显示"下拉刷新"、110px 显示"松手刷新"且 armed；松手后 `reconnect` 调用计数 = 1、文案"刷新中…"、随后收起复位；负例（input 内下拉、滚动容器 `scrollTop=185` 处下拉）均不接管、调用计数 0。
+
+### 89. dsh 0.1.1-rc.1 → 0.1.5-rc.2 升级：会话日志 v0→v3 迁移的两个新拒绝点 + profile 旧包遮蔽 in-box bundle
+
+**背景**：1065 个会话（约 2.1GB zstd）需从 v0 升到 0.1.5-rc.2 的 v3。0.1.5-rc.2 内置完整迁移链 `dsh-session-format-v0-to-v1` → `v1-to-v2` → `v2-to-v3`（`sessionFormatCatalog.currentVersion = 3`），迁移在**读取时**按需执行。
+
+**拒绝点 1：`permission/preset` 的多余成员 `origin`（v0→v1）**
+`RELEASED_V0_EVENT_DISPOSITIONS["permission/preset"] = disposition(["preset"])`，而 `assertReleasedV0Keys()` 对 **unexpected member 直接抛 `SessionFormatError`**（不是忽略）。全部会话 header 都是 `{"type":"session","version":0}`，497 个文件含该字段，必须删除。
+**反向教训（做无用功）**：同一批会话里 `model/selection` **本来就在 v0 冻结清单内**、`sourceEventSeqs` 的 `[start,end]` 区间由 `decodeSeqRanges` **原生支持**——这两项不需要任何处理。当时凭"格式看着可疑"就动手改，属于**没读校验器就猜**。
+
+**拒绝点 2：插件自定义 `source.kind` 不在 v2→v3 白名单（157 个会话 / 14745 处）**
+`dsh-session-format-v2-to-v3` 的 `SOURCE_KINDS` 只认 15 个值：`user/plugin/model/tool/agent-instructions/session-reference/team-message/goal/skill-invocation/skill-catalog/coordinator/subagent-report/subagent-settled/webhook/agent-message`。`dsh-agent-message`(14810 处) 与 `dsh-chaseman-link`(95 处) 这两个本地插件的 kind 全被拒，报 `cannot safely transform unclassified message source`。
+**最容易漏的坑：`assertSource()` 有 4 个调用点，只扫其中一处会漏一半。**
+```
+user/message                    → assertSource(data)                 # data 本身就是 message
+assistant/message, tool/result  → assertSource(data.message)
+agent/inbox/spliced             → data.inserted[] 每个 message
+session/title-llm-request       → data.messages[] 每个 message
+```
+第一次只按前两个事件类型扫，报"0 违规"，实际点开会话仍失败。
+**解法**：把 kind 归一化为 `agent-message`——`assertSource` 只对 `kind === "agent-message"` 施加形状约束：`keys(source, ["kind","form","senderSessionId"], [])` 且 `form` 必须 `"relay"`、`senderSessionId` 非空字符串。原对象带 `protocolVersion/targetSessionId/senderTitle/project/role` 等多余字段必须**一并丢弃**，否则 `keys()` 仍会拒。不满足形状时退化为 `kind: "plugin"`（该 kind 无额外形状约束）。
+**重要边界**：`assertSource` **只在迁移路径调用**（`assertEvent` 里 `version === 3` 时直接 `return assertV3Event(event)`，而 `assertV3Event` 不校验 source）。所以插件在 0.1.5-rc.2 上继续写自定义 kind 的**新**事件不会再次弄坏会话——不需要改插件、也不需要再改数据。
+
+**profile 旧包遮蔽 in-box bundle（升级后 boot 失败的真因）**
+现象：`ERR_PACKAGE_PATH_NOT_EXPORTED: Package subpath './model-selection-settings' is not defined by "exports" in .../profiles/web/node_modules/@deepseek-ai/dsh-tool-subagent/package.json`。
+根因：`dsh-app-boot` 的 profile 模块解析是**双锚点**——bundle 名先从 dsh 安装解析，但 **profile 自身 `node_modules` 里的实体目录按 Node 常规顺序抢先命中**。`profiles/web/node_modules/@deepseek-ai/` 里残留 195 个 **0.1.1-rc.2 实体拷贝**，遮蔽了 launcher 刚物化在 `~/.dsh/profiles/node_modules/@deepseek-ai/`（244 个 **junction**，指向安装内的 0.1.5-rc.2）。launcher 只物化缺失的，不覆盖已存在的。
+**解法**：把 `profiles/web/node_modules/@deepseek-ai` 整体**改名**（如 `.stale-…`）即可，无需删除；新闭包在父级 `profiles/node_modules` 里已就绪（其中 `dsh-client-runtime` 是指向**不存在路径的断链 junction**，属正常残留，不影响）。
+**可复算验收**：`dsh --profile web --dump-config` exit 0 且无重复 ID，再 `node -e "require('<profile>/node_modules/@deepseek-ai/dsh-tool-subagent/package.json').version"` 应等于新版版本号。
+
+### 90. 会话格式批处理的性能与观测陷阱（python-zstandard O(n²)、`| tail` 吞进度、旧 API 路径）
+
+**python-zstandard 逐帧解压是 O(n²)**：多帧 zstd 用 `decompressobj()` + `o.unused_data` 循环切帧，每次 `unused_data` 都会**拷贝剩余全部字节**。实测 70MB / 3001 帧耗时 **57.7s 且只消费了 1.5MB**（外推整个文件约 45 分钟），两个脚本先后卡在同一文件同一位置，极易误判成"脚本死了/文件损坏"。
+**解法**：第 0 帧（header）单独用 `decompressobj()` 取，其余一律
+```python
+with dctx.stream_reader(io.BytesIO(rest), read_across_frames=True) as r: body = r.read()
+```
+同一文件 **0.37s**（约 15 万倍）。全量 1065 文件扫描从"外推 45 分钟"降到 **20 秒**。
+**帧结构约束**：读取器（`readZstdPrefix` → `assertZstdHeaderFrame`）**只要求第 0 帧恰好一行 header**；其余帧由 `SessionLogScanner` 流式消费、不依赖帧数量——所以重写为「header 帧 + 单个 body 帧」是安全的。
+
+**`cmd | tail -40` 会让长任务变黑盒**：Python 的 stdout 经管道进入 `tail` 后被整体缓冲，任务跑 10 分钟也看不到一行进度，只能靠 mtime 猜。长任务一律 `> logfile` 重定向，并加 `-u` 与逐文件/逐 N 条 flush 日志。
+**判断"卡住"还是"在算"**：`Get-Process <pid> | Select CPU` 连续采样——CPU 在涨说明在算；再看有无 `.bak` 等**写盘动作**产出，比看日志可靠。
+
+**0.1.5-rc.2 的 HTTP API 路径换了**：`/api/session.list`（0.1.1）→ **`POST /api/session/list`**（点号换斜杠），恢复内存态在 `/api/dynamicCordisRunner/inventory` 等。
+typert 信封（缺一个字段就换一个报错，跟着报错逐层补）：
+```json
+{"type":"client-request","rpcId":"x","method":"session/list","payload":{"args":{"_request":{}}}}
+```
+鉴权：`GET /?token=<boot 日志里那条 token>` 拿到 `dsh-auth-*` cookie 后带 cookie 调用；无 token 时 `/` 与 `/api/*` 都是 401。**不要**用 `/api/session.list` 试——那是 404，会误判成"接口没了"。
+
+**`dsh-client-runtime` 被移除**：0.1.5-rc.2 里内置客户端包改用 `@deepseek-ai/dsh-client-store`（`defineStore` 符号名不变），`@deepseek-ai/dsh-client-runtime` 全树不存在。第三方客户端插件（如 `dsh-plugin-global-prompt` 0.1.1/0.1.3——两版 `lib/client.js` **逐字节相同**，升级版本号不解决问题）会报 `Failed to load plugins … require("@deepseek-ai/dsh-client-runtime/client") missed the module table`，整个 UI 停在错误页。本地补丁：`lib/client.js` 的 require 与 `package.json` 的 `dsh.client.inject` 同步改成 `dsh-client-store`，并把 `settingsScope` 订阅回调加上 undefined 兜底（`subscribe` 可能传 undefined，`getSnapshot()` 则正常返回对象）。
