@@ -874,3 +874,44 @@ typert 信封（缺一个字段就换一个报错，跟着报错逐层补）：
 鉴权：`GET /?token=<boot 日志里那条 token>` 拿到 `dsh-auth-*` cookie 后带 cookie 调用；无 token 时 `/` 与 `/api/*` 都是 401。**不要**用 `/api/session.list` 试——那是 404，会误判成"接口没了"。
 
 **`dsh-client-runtime` 被移除**：0.1.5-rc.2 里内置客户端包改用 `@deepseek-ai/dsh-client-store`（`defineStore` 符号名不变），`@deepseek-ai/dsh-client-runtime` 全树不存在。第三方客户端插件（如 `dsh-plugin-global-prompt` 0.1.1/0.1.3——两版 `lib/client.js` **逐字节相同**，升级版本号不解决问题）会报 `Failed to load plugins … require("@deepseek-ai/dsh-client-runtime/client") missed the module table`，整个 UI 停在错误页。本地补丁：`lib/client.js` 的 require 与 `package.json` 的 `dsh.client.inject` 同步改成 `dsh-client-store`，并把 `settingsScope` 订阅回调加上 undefined 兜底（`subscribe` 可能传 undefined，`getSnapshot()` 则正常返回对象）。
+
+### 91. 把外部 CLI 做成 DSH 工具型插件（dsh-browser-harness 实战）
+
+**场景**：把 `browser-use` 的 Browser Harness 包装成 `browser_run(python)` / `browser_status` 两个工具。以下每条都是实测结论。
+
+**① 同名 CLI 可能有两个版本，裸命令名不可信**
+本机 PATH 里先命中 `Python314\Scripts\browser-use.exe`（**旧版原子式 CLI，v0.12.3**，子命令是 `open/click/type`，不认 stdin 的 Python 协议），uv tool 装的那份在 `~/.local/bin/browser-use.exe`（v0.13.10，`--version` 打印的是内部 harness 版本 **0.1.13**）。
+**解法**：插件按 `config.command → 环境变量 → uv tool 安装位 → PATH 兜底` 的顺序显式解析，并把结果与来源回显在 status 工具里。**不这样做，插件会在别人的机器上静默走错 CLI。**
+
+**② Browser Harness 的契约（browser-use/browser-harness，实测）**
+- stdin 是「**整段读一次 → exec 一次 → 进程退出**」，**不是 REPL**；没有跨调用的 Python 变量
+- 持久化的只有 **daemon 进程 + 它附着的那个 tab**（"The daemon preserves the attached tab across separate CLI invocations"）
+- **不需要 API key**（`auth login` 只服务云浏览器，doctor 里那条 cloud auth 官方标注 optional）；**不需要 LLM**（`extract` 属于 agent 库，CLI 不加载）
+- stdout 是 `print` 纯直通；更新提示走 stderr，`BH_UPDATE_CHECK=0` 可禁；`BH_TAB_MARKER=0` 去掉 tab 标题里的 🐴 前缀
+- 退出码 `0` 成功 / `1` 运行时错误（stderr 前缀 `browser-harness: `）/ `2` 用法错误与 NameError
+- **`doctor --json` 会被 browser-use 包装层拦掉**（只放行 `--fix-snap`），只能用可读版 `--doctor`；想要 JSON 得直接调 `browser-harness`
+- 错误码是可枚举的机器契约：`chrome-not-running` / `permission-blocked` / `remote-debugging-setup` / `BU_CDP_URL=... unreachable` / `daemon-starting`
+
+**③ 冷启动第一次调用必挂，必须前置 ensure_daemon()**
+首次调用时 daemon 要启动并附着 Chrome，耗时超过 harness 内部 **IPC 的 5s 响应上限** → 用户脚本里第一条指令（如 `new_tab`）直接 `TimeoutError`，**但动作其实执行成功了**（doctor 里能看到页面已经打开）。极易误判成"CLI 不能用"。
+**解法**：在执行用户代码前自动前置一行 `ensure_daemon()`（exec 共享 globals，不影响用户变量）。实测加前置后退出码 0。
+
+**④ 官方隔离配方：BU_CDP_URL + 专用 user-data-dir**
+harness 默认会**附着用户正在用的 Chrome**，Chrome 没开时还会**替你启动真实 profile 的 Chrome**，并在 Chrome 136+/144+ 触发"允许远程调试"授权弹窗。要完全隔离，就自己起 `chrome --remote-debugging-port=<port> --user-data-dir=<专用目录>` 再设 `BU_CDP_URL`（源码注释原话：非默认 profile 可避开 M136 锁定与 M144 弹窗）。
+**并发**：每个 `BU_NAME` 一个单例 daemon，**同一 daemon 只有一个"当前 tab"** → 官方措辞 "serialize operations"，插件必须自己串行化。
+**隐私**：遥测默认上传 **stdout 尾部最多 20KB**，安装后务必 `browser-use telemetry disable`。
+
+**⑤ defineTool 的 parameters 会被编译，调试时别对着原形态断言**
+`defineTool({parameters:{...}})` 注册后，`tool.parameters` 已经是编译出的 `{type:'object',properties:{...},required:[...]}`，不再是扁平的属性表。写冒烟断言要看**编译后**的形态（本次两条失败全是因为断言写在了编译前）。
+
+**⑥ link 插件必须自带宿主同版的完整依赖闭包**
+插件 `import '@deepseek-ai/dsh-tools'` 后，Node 会从插件目录向上找 —— 找不到就 `ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/cordis'`。只复制 `dsh-tools` 一个包**不够**（它的传递依赖在自己的闭包里）。
+**解法**：把宿主 `dsh/node_modules/@deepseek-ai/` 整个拷进插件 `node_modules/@deepseek-ai/`（本次 239 个包）。注意参考插件的闭包停在 0.1.1-rc.2 而宿主已升到 0.1.5-rc.2 —— **按宿主当前版本取，别抄旧闭包**。
+
+**⑦ 给已装插件改名会产生悬空链接 + bundle 残留**
+`pnpm remove 旧名` 之后再 `pnpm add link:<新路径>`，如果新路径还不存在（目录被占用改名失败）就会留下**悬空 junction**；且 `dsh plugin ... install` 的 reconcile 是"按已安装状态追加"，**不会自动移除旧名** → profile 的 `dsh.profile.bundles` 里会**同时存在新旧两个名字**，boot 时 `cannot resolve profile bundle`。
+**解法**：改完名手工把旧 bundle 条目从 `package.json` 的 `dsh.profile.bundles` 里删掉再 `--dump-config` 验证。另外目录名被句柄锁住（"Device or resource busy"，node 已全退也锁着）时**不必硬改** —— 包名在 `package.json` 里，目录名纯属外观。
+
+**⑧ npm 包名先查再定**
+`dsh-browser-use` 已被 `zoah` 占用（2026-08-17 发布，走 Browser Use **Cloud** 需云端 key，与本插件的本地路线定位不同但名字冲突）。定名前用 `npm view <name> version` 逐个探；占用的返回版本号，可用的报 404。本次最终用 `dsh-browser-harness`。
+**Gitee 建仓 API 仍然恒私有**（`private=false` 也返回 `private: true`，PATCH 转公开返回空体）—— 与第 8 条一致，仍需网页改。
