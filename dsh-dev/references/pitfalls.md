@@ -915,3 +915,24 @@ harness 默认会**附着用户正在用的 Chrome**，Chrome 没开时还会**�
 **⑧ npm 包名先查再定**
 `dsh-browser-use` 已被 `zoah` 占用（2026-08-17 发布，走 Browser Use **Cloud** 需云端 key，与本插件的本地路线定位不同但名字冲突）。定名前用 `npm view <name> version` 逐个探；占用的返回版本号，可用的报 404。本次最终用 `dsh-browser-harness`。
 **Gitee 建仓 API 仍然恒私有**（`private=false` 也返回 `private: true`，PATCH 转公开返回空体）—— 与第 8 条一致，仍需网页改。
+
+### 92. 插件 client 半边升级迁移三层坑：slot 抢注、priority 字段、.stale 目录被扫成活入口
+
+**背景**：media-capture 在 dsh 0.1.5-rc.2 上传图片报 `conversation.createDraftImages is not a function`。修了三轮才闭环——三层问题叠着，每修一层才露出下一层。
+
+**第 1 层：conversation 客户端抽象从 images 重构为 attachments**
+`createDraftImages` / `input.addImages` / `releaseDraftImages` 全部删除；替代是 `conversation.createDrafts(sessionId, files)`（client.js:2972，图片走对象 URL 预览、非图片立即后台上传）+ `conversation.sendSession(session, text, attachmentIds, mode, signal)`（session 即 `sessions.scope(id)` 的作用域对象，**空 text 合法**）+ `releaseDraftAttachments`。sendSession 对文件类附件校验 `fileUploads[id].status === "ready"`，图片类不需要。
+
+**第 2 层：composer 挂载面对插件已关闭（别再试图「只挂输入框」）**
+- `conversation.input.attachments` 是 **single 槽位**且已被官方 `dsh-client-ui-attachment`（`slots.inject` 不带 priority ⇒ priority 0）注册；shadow 它（换 priority）会**顶掉官方附件预览条**。
+- single 槽位的遮蔽优先级字段是 register spec 上的 **`priority`**（`t.priority ?? 0`），**不是 `order`**——传 `order: -10` 会被忽略、默认 0，照样撞车。语义 "lowest renders"：最低 priority 的渲染。
+- conversation 服务公开面**没有**任何「把 draft 挂进 composer」的方法；uiSession 的 inputActions 只经 props 通道下发，插件不可达。
+- **结论**：「选图进输入框、用户补文字再发」这个语义对插件不可达；插件应改走 `createDrafts + sendSession` 的面板直发（带可选备注），全公开 API、升级鲁棒。
+
+**第 3 层：自建的 `.stale-*` 目录留在 node_modules 里会被扫成活 loader entry**
+隔离旧版包时把 `node_modules/@deepseek-ai` 改名成 `.stale-deepseek-ai-0.1.1-rc.2` 留在原地——dsh 的 client-modules 枚举 node_modules 时把它也扫了，旧版 `dsh-client-ui-attachment`/`ui-conversation` 的 client.js 被当作活入口加载，**抢先注册了 attachments 槽位**（报错 `registered by Ba`，Ba 是压缩名）。于是新修复怎么改都"仍然冲突"——**冲突者根本不是新代码，是历史遗留**。
+**解法**：隔离目录必须移出 node_modules（如 `~/.dsh/backups/`）。**教训**：修 slot 冲突先清点「当前到底有谁注册了这个槽位」（抓运行时合并包 grep `slots.inject('<槽位名>'` 数注册者），别对着报错改新代码。
+
+**排查纪律补丁**：
+- `grep -r` **不跟随符号链接**——`link:` 插件（D 盘源码）会被整目录漏搜，必须 `grep -R` 或直接搜源码目录。本次第一轮全量体检因此漏掉了真正抢注者所在的 link 插件。
+- 区分错误层级：`Failed to load plugins`（前端 loader apply 失败）≠ 运行期 `is not a function`。加载期错误看 entry 注册冲突，运行期错误看 API 存在性，修法完全不同。
