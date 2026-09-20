@@ -936,3 +936,28 @@ harness 默认会**附着用户正在用的 Chrome**，Chrome 没开时还会**�
 **排查纪律补丁**：
 - `grep -r` **不跟随符号链接**——`link:` 插件（D 盘源码）会被整目录漏搜，必须 `grep -R` 或直接搜源码目录。本次第一轮全量体检因此漏掉了真正抢注者所在的 link 插件。
 - 区分错误层级：`Failed to load plugins`（前端 loader apply 失败）≠ 运行期 `is not a function`。加载期错误看 entry 注册冲突，运行期错误看 API 存在性，修法完全不同。
+
+### 93. DSH 插件「配置了才启用」的实现模式（browser_autopilot / TypeSafe key）
+
+**症状**：想让工具「没配置 key 就不使用，配置了就使用」。动态注册/注销工具不是稳定契约（tools.unregister 未验证），不能走那条路。
+
+**模式（已验证，dsh-browser-harness 0.4.0）**——三层齐断：
+1. **工具始终注册，执行时实时读 key**：没 key 时 `execute` 返回 `{ok:false, hint:'未配置…到 设置→通用设置→…填入保存后立即可用'}`。
+2. **系统提示词不注入**：`sctx.systemPrompt.section({ text: () => hasKey() ? BASE + EXTRA : BASE })` —— `text` 是**函数、每步重估**（与 global-prompt 热生效同机制），没配置时模型连工具存在都看不到。
+3. **browser_status 回显状态**：`autopilot: { typesafeKey: '(已配置)/(未配置)', note }`。
+
+**key 的读取纪律**：每次 `execute` 都重读 `settingsScope.get()`，优先级 `settings > env > 空`。settings provider 热加载 settings.yaml，保存即生效无需重启 —— 不要把 key 缓存进 apply 闭包变量。
+
+**执行体留接口不瞎猜**：外部运行体未实测时（如 jev-ultrafast 的真实 CLI 形态），用配置项（`autopilotCommand`）驱动 + 未配置时返回安装指引，绝不 spawn 一个没验证过的命令名。
+
+### 94. 插件 client 半边的离线冒烟 + pnpm v11 link: 环境漂移
+
+**client.js 离线冒烟（不进浏览器也能抓错）**：
+- `globalThis.window = { __ModuleLoader__: { load(def){...} } }` 必须**先置后动态 import**（client.js 顶层就调 load；ESM 静态 import 会提升，必须 `await import()`）。
+- 模块 = **`def.factory(require)` 的返回值**（`module.exports`），不是 `def.exports`。
+- mock require 白名单只给 `react/jsx-runtime`、`react`、`@deepseek-ai/dsh-client-store`；apply 阶段不渲染组件，react 只要空壳 hooks。
+- 断言：id、inject 三服务、settingsScope 绑的 namespace、`slots.inject('settings.general.item')`、槽位 id、**中英词典 key 集一致**。
+
+**pnpm v11.22 环境漂移**：`nodeLinker: hoisted` + `link:` 依赖在**全新 profile** 下 `pnpm install` 显示 Done 但 node_modules 不落任何包/symlink（`.pnpm-workspace-state-v1.json` 认为已最新），`dsh --dump-config` 报 `cannot resolve profile bundle "X"`。9 月沙盒还好使（v10），v11 坏了。
+- **替代验证**：正式 web profile 本身就是 link: 指向源码目录 —— `cd ~/.dsh/profiles/web && DSH_USER_SYSTEM_PORT=3099 dsh --profile web --dump-config` 用新进程 boot 一遍改动，EXIT=0 + stderr 空 + entry 入树即可确认 boot 无恙（错开端口，不碰运行中的 3080 实例）。
+- git-bash 下 `timeout 90 cmd > f 2> e` 会把 `2` 当 dsh 的参数（`config dumps take no app arguments, got "2"`）—— 重定向别和 timeout 混用。
