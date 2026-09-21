@@ -961,3 +961,5 @@ harness 默认会**附着用户正在用的 Chrome**，Chrome 没开时还会**�
 **pnpm v11.22 环境漂移**：`nodeLinker: hoisted` + `link:` 依赖在**全新 profile** 下 `pnpm install` 显示 Done 但 node_modules 不落任何包/symlink（`.pnpm-workspace-state-v1.json` 认为已最新），`dsh --dump-config` 报 `cannot resolve profile bundle "X"`。9 月沙盒还好使（v10），v11 坏了。
 - **替代验证**：正式 web profile 本身就是 link: 指向源码目录 —— `cd ~/.dsh/profiles/web && DSH_USER_SYSTEM_PORT=3099 dsh --profile web --dump-config` 用新进程 boot 一遍改动，EXIT=0 + stderr 空 + entry 入树即可确认 boot 无恙（错开端口，不碰运行中的 3080 实例）。
 - git-bash 下 `timeout 90 cmd > f 2> e` 会把 `2` 当 dsh 的参数（`config dumps take no app arguments, got "2"`）—— 重定向别和 timeout 混用。
+
+**#94 补充（0.4.1 事故）**：`__ModuleLoader__.load` 的 **id 必须逐字等于插件包名**——宿主 client bundle 加载后校验「每个贡献 client 的插件都注册了自己的包名」，id 不一致直接拒载整个插件 client（报 `loaded without registering "<pkg>" via __ModuleLoader__.load`）。照抄 global-prompt 模板时它的 id 恰好等于它的包名（dsh-plugin-global-prompt），换包名后 id 不跟着改就炸。防御：smoke 断言 `clientDef.id === package.json.name`（从 package.json 读，不写死）。
