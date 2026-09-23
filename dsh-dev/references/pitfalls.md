@@ -963,3 +963,22 @@ harness 默认会**附着用户正在用的 Chrome**，Chrome 没开时还会**�
 - git-bash 下 `timeout 90 cmd > f 2> e` 会把 `2` 当 dsh 的参数（`config dumps take no app arguments, got "2"`）—— 重定向别和 timeout 混用。
 
 **#94 补充（0.4.1 事故）**：`__ModuleLoader__.load` 的 **id 必须逐字等于插件包名**——宿主 client bundle 加载后校验「每个贡献 client 的插件都注册了自己的包名」，id 不一致直接拒载整个插件 client（报 `loaded without registering "<pkg>" via __ModuleLoader__.load`）。照抄 global-prompt 模板时它的 id 恰好等于它的包名（dsh-plugin-global-prompt），换包名后 id 不跟着改就炸。防御：smoke 断言 `clientDef.id === package.json.name`（从 package.json 读，不写死）。
+
+### 95. hook cordis Service 方法必须 bind，丢 this 直接撞实例内部状态错
+
+**症状**：插件 hook 了 dsh-session-persistence-jsonl 的 `list` 方法后，dsh 启动报 `Cannot read properties of undefined (reading 'tracker')` ——**tracker 是 undefined**。原方法 `[...this.tracker.pendingEntries()]`（jsonl.js:2458）依赖 `this`。
+**根因**：`const orig = sp[method];` 不 bind，调 `orig(...args)` 时 `this` 是 undefined（strict mode）或全局对象。**dsh 的 Service 实例方法（list / listArtifacts / listSnapshots / open / create / write / flush）全部依赖 this 实例属性**（tracker、root、cache、store...）。同时 cordis 卸载断言 `sp[method] === orig` 也会因 bind 改引用而失败——但**正确解法是「mock 用 bind(sp) 对齐引用」**，不是「去掉 bind」。
+**解除法**：
+```js
+const orig = sp[method].bind(sp); // 必须 bind：保留 this；真机 dsh 启动因此必须测
+sp[method] = async (...args) => {
+  if (key.startsWith('Symbol(')) return orig(...args); // 跳过缓存时也走 orig，绝不走 sp[method]（会自递归）
+  ...
+};
+```
+**Mock 验证**（smoke 必须包含）：
+- 原方法用 `async function () { ... this.xxx ... }` 形式，依赖 `this.x`
+- assert 验证「冷扫结果里包含 `this.x` 的值」——bind 没丢 this 的硬证据
+- 「卸载后 sp[method] 调用结果仍包含 this.x」——bind 还原后 this 仍正确
+**真机验证（必做）**：smoke 通过不等于 dsh 启动成功。跑 `DSH_USER_SYSTEM_PORT=<unused> dsh --profile web --no-open > out.log 2>&1`（错开端口不碰运行实例），看日志 `[perf-boost] listArtifacts 冷扫 #1 耗时=Nms` 真出现 + 无 `tracker` / `Cannot read` 错。`grep -E "perf-boost" out.log` 一行必须有，否则视为未生效。
+**教训**：hook 类插件「在 mock 里跑通 ≠ 在 dsh 里跑通」，因为 mock 多用箭头函数不依赖 this；真 dsh 的 Service 实例方法 100% 依赖 this。两步验证缺一不可。
