@@ -1117,3 +1117,40 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3090/
 curl -s -o /dev/null -w "%{http_code}\n" http://192.168.31.23:3080/
 curl -s -o /dev/null -w "%{http_code}\n" https://dsh.chaseman.cn/
 ```
+
+### 102. 会话格式 v4 升级把 1314 个老会话锁死：`format v4 message requires a producer-owned source kind`
+
+**症状**：用户报「本轮运行失败：format v4 message requires a producer-owned source kind」——
+**打开任意老会话即失败**。全库扫描（1621 个会话）**1314 个命中**（81%），最惨的单个会话 588 条违规。
+
+**根因链**：
+1. dsh 0.1.7 引入 **会话格式 v4**（`dsh-session-format-v3-to-v4`）
+2. v4 要求消息的 `source.kind` 为 **producer-owned**，**禁止 v3 的 `kind: "plugin"`** 写法
+3. 存量会话大量是 **v0/v3 格式**（`session.jsonl.zstd` 无版本号 / `.v3.`），其 source 仍是
+   `{"kind":"plugin","plugin":"dsh-session-title-llm"}` / `{"kind":"plugin","plugin":"compact","compactionId":...}`
+4. **打开会话 → 迁移链 v0→v1→…→v4 → `source()` 校验先抛错**，尽管 `producerKind()` 本可把
+   这些 plugin 名转换掉（`dsh-session-title-llm` 在白名单、`compact` 会走 `plugin:` 前缀兜底）
+
+**修复（本质不同：不改 1314 个会话，改一处代码）**：
+patch `dsh-session-format-v3-to-v4/lib/index.js` 的 `source()`，**抛错前就地转换**：
+```js
+if (isSessionFormatJsonObject(value) && value["kind"] === "plugin" && typeof value["plugin"] === "string") {
+    value["kind"] = producerKind(value["plugin"], message["role"]);
+    delete value["plugin"];
+    return;
+}
+```
+**注意**：该包在 **dsh 全局安装内**（不是 profile），**dsh 升级会覆盖** → 备份 `.bak-20260926` + 本条目留档，
+升级后需重新应用。
+
+**排查方法论**：会话类错误**先做全库扫描**（`zstd -dc | grep -c '"kind":"plugin"'`），
+一次拿到「影响面 + 违规形态」；对比 header 的 `version` 字段（`version:0` vs `version:4`）
+即可判定「迁移该跑而没跑」还是「数据本身坏」。
+
+**扫描脚本**（本机实测 1621 个会话 ~数分钟）：
+```bash
+for f in $(find ~/.dsh/sessions -name "*.zstd"); do
+  n=$(zstd -dc "$f" | grep -cE '"source":\{[^}]*"kind":"(plugin|)"')
+  [ "$n" != "0" ] && echo "HIT($n) $(basename $(dirname $f))"
+done
+```
