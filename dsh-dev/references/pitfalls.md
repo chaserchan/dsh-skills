@@ -1007,3 +1007,39 @@ sp[method] = async (...args) => {
 **坑 C**：手动补 profile 闭包版本必须**沿依赖链补齐**：schemastery 3.18.4 需要 cosmokit 新 API（createVolatile），只升 schemastery 会让**所有** import schemastery 的第三方包集体 failed to import（dshmarket/session-cost/agent-message/global-prompt 四连挂）。修法 = cosmokit 一并同步宿主版本。**且 node -e 的 import() 旁证测试会撒谎**（解析上下文伪影：直接 import cosmokit OK 但 import 消费包仍报错/反之）——唯一裁判是真 boot（错开端口）+ 运行实例日志。
 
 **升级后用户报「东西没了」的排查序**：①`ls ~/.dsh/settings.yaml*`（配置文件在不在）②boot 日志 grep disabling/failed（谁被门禁拒）③client pending 名单（谁等旧服务）④设置页 UI 重构导致的展示变化（不是数据丢失）。
+
+### 98. dsh 0.1.7 client settingsScope 移除的正确解法：兼容垫片（provide 一次救全部）
+
+**症状**：0.1.7 升级后，所有第三方 client 插件报 `pending (waiting for service: settingsScope)`（session-cost / agent-message / media-capture / global-prompt / session-cost…）。根因：0.1.7 把 client settings 体系重构为 **ConfigForms**（`super(ctx,"configForms")`），旧 `settingsScope` 服务**字符串级消失**（宿主全量 grep 零命中）。
+
+**错误解法（我踩过的坑，2 轮返工）**：逐个 patch 第三方插件 —— ①手改 node_modules 被 pnpm install 重置；②手搓 unified diff 被 pnpm 的 patch 解析器拒绝（`ERR_PNPM_PATCH_FAILED`，格式挑剔）；③`pnpm patch` 编辑目录非空要 `patch-commit` 清理。逐个修 = 治标且脆弱（插件升级即失效）。
+
+**正确解法（本质不同）：不修第三方，补上缺失的服务。**
+cordis 的 `inject` 是**「等服务」语义** —— 服务一经 provide，所有等待者**自动激活**，与加载顺序无关。所以只需一个垫片：
+
+```js
+ctx.provide("settingsScope", {
+  bind: ({ namespace }) => {
+    const form = ctx.configForms.get(namespace);  // ConfigFormController
+    return {
+      getSnapshot: () => ({ status: "ready", value: form.getSnapshot().value ?? {} }),  // 补 status！
+      subscribe: (fn) => form.subscribe(() => fn(snapshot())),
+      set: (field, value) => form.set(field, value),
+    };
+  },
+});
+```
+
+**契约为实测反推**（读消费方源码，不要猜）：`getSnapshot()` 同步返回、**必须带 `status: "ready"`**（session-cost 硬检查）；`subscribe(fn)` 返回 disposer，fn 可能带参也可能不带（两者都发）；`set(field,value)` → Promise。
+
+**三个工程要点**：
+1. **降级不炸**：`configForms.get(ns)` 对未注册 namespace 可能抛错 → try/catch + 内存 scope（`status:"unavailable"`，set 为 no-op）。比 pending 不可用强。
+2. **冲突让位**：cordis 对同名服务重复注册**会抛错**（`service "x" has been registered at <fiber>`）→ provide 包 try/catch，撞车时静默让位。
+3. **失败隔离**：消费方 callback 抛错会污染 fan-out → 垫片里 try/catch 包住 `fn(snap())`。
+
+**验证链（三层，缺一不可）**：
+- 单测：mock `ctx.provide` 捕获实现 + 逐条断言契约（含降级/冲突分支）
+- 下发：curl host 的 `<link rel="preload" href="plugins/??...&rev=...">` 聚合 URL（**URL 在 preload 里，不在 script src 里**；`&amp;` 要还原；逗号分隔）→ grep 垫片代码
+- **运行时：CDP 独立标签**（`PUT http://127.0.0.1:9334/json/new?about:blank` → WS `Runtime.enable`/`Log.enable`/`Page.navigate` → 捕获 console + 读 `document.body.innerText`）—— 零干扰用户浏览器，能直接看到垫片的 console.info 与横幅消失。
+
+**教训**：「一个一个修」是执行者思维；「补上缺失的服务让等待者自动激活」才是 owner 思维（一个问题进来，一类问题出去）。
