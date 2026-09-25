@@ -1043,3 +1043,23 @@ ctx.provide("settingsScope", {
 - **运行时：CDP 独立标签**（`PUT http://127.0.0.1:9334/json/new?about:blank` → WS `Runtime.enable`/`Log.enable`/`Page.navigate` → 捕获 console + 读 `document.body.innerText`）—— 零干扰用户浏览器，能直接看到垫片的 console.info 与横幅消失。
 
 **教训**：「一个一个修」是执行者思维；「补上缺失的服务让等待者自动激活」才是 owner 思维（一个问题进来，一类问题出去）。
+
+### 99. dsh 0.1.7 首屏卡顿 + 「启用插件 EPERM」：两个 Windows 侧真凶
+
+**首屏卡顿（实测 227 秒）**：`POST /api/pluginInventory/list` 全参路径极慢 —— `readPluginInventory()`
+每次遍历全部 Loader entries + 逐项 `packages.metaOf()` + `agentPresets.compositionInventory()`。
+**官方明确不缓存**（源码注释：*a second cache would only add another lifecycle truth*）。
+空参 curl 5ms（空路径），浏览器全参 **227268ms**（NS_BINDING_ABORTED → 重发）。
+**解**：perf-boost 0.4.0 hook `pluginInventory.list`（TTL 60s + in-flight，同 sessionPersistence 模式，真机日志验证）。
+**诊断法**：让用户开 DevTools → Network 看首屏 API 的**耗时列**——不要只看状态码，200 也可能是 227 秒。
+
+**启用插件 EPERM**：`dsh-atomic-write` 的 `withFileLock` 用 `<file>.lock` 兄弟文件做跨进程串行；它**知道**
+Windows rename 会被瞬时限流，内置 8 次重试（20ms 起指数退避）——**EPERM 出现 = 8 次全失败 = 持续干扰**（非瞬时）。
+实测运行中的 dsh 持有 profile `package.json` 句柄（`fs.openSync(p,'r+')` 即 EPERM），
+设置页点「启用」/ `dsh plugin add` 全部失败。
+**解**：插件变更集中到停机窗口（stopband 脚本）；不要在运行实例上改。
+
+**内存画像（供容量规划）**：dsh 0.1.7 + 1568 会话 + 全插件实测工作集 **5-6.4GB**（跑 2h 时 6387MB）。
+`--max-old-space-size` **不能按"V8 松弛"砍**：设 3072 会 17.5 秒 OOM 崩（`Reached heap limit`）；
+16384 则放任膨胀到 16.7GB 崩。**8GB 是实测合理值**。两条启动路径（手工 ps1 / watchdog）参数必须一致，
+否则排查时会被"同一个 dsh 两种行为"绕晕。
