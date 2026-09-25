@@ -996,3 +996,14 @@ sp[method] = async (...args) => {
 **诊断技巧**：报错「公网好本地坏」先想到**两个 origin 浏览器缓存独立**（dsh.chaseman.cn vs 127.0.0.1 各存一份 bundle）——同一实例两份不同版本的 client。client 插件 failed 的详情只在浏览器 console，宿主 dsh-web.log 不记 client loader 错误。
 
 **冒烟防复发断言**：mock 降级路径用**完全空的 ctx（{}）**调 apply——任何对 ctx 属性的访问都会暴露；legacy 实现单独导出（applyLegacySettingsScope）单独测，ConfigForms 重写时是参考。
+
+### 97. dsh 0.1.7 升级三连坑：settings 迁移中断丢配置、运行实例锁 package.json、闭包连锁升级
+
+**坑 A（最重，丢用户可见配置）**：0.1.7 某次启动把 `~/.dsh/settings.yaml` 改名 `settings.yaml.imported` 留底后，**新 settings.yaml 没写出来**（迁移中断）→ 系统空设置运行：模型提供商、global-prompt 文本、全部用户偏好「消失」。0.1.7 的存储文件名**仍是 settings.yaml**（dsh-settings 源码实证）。
+**恢复**：`.imported` 内容完好 → `cp settings.yaml.imported settings.yaml`（先额外备份一份 .bak）。放回后 10 秒观察未被再次改名即稳。**教训**：升级后用户报「配置丢了」第一步查 `~/.dsh/settings.yaml*` 全家（.imported/.bak 常在），数据在文件里就没丢。
+
+**坑 B**：0.1.7 **运行中的实例锁死 profile 的 package.json**（EPERM rename）→ 运行时一切插件变更全废：`dsh plugin add`、设置页「启用/禁用」按钮、插件安装 UI 全部报 EPERM。0.1.5 时代运行时装插件是好的——0.1.7 行为变化。**解法**：插件变更集中到停机窗口一次做完（停 dsh → 改 package.json + pnpm install → 起）。
+
+**坑 C**：手动补 profile 闭包版本必须**沿依赖链补齐**：schemastery 3.18.4 需要 cosmokit 新 API（createVolatile），只升 schemastery 会让**所有** import schemastery 的第三方包集体 failed to import（dshmarket/session-cost/agent-message/global-prompt 四连挂）。修法 = cosmokit 一并同步宿主版本。**且 node -e 的 import() 旁证测试会撒谎**（解析上下文伪影：直接 import cosmokit OK 但 import 消费包仍报错/反之）——唯一裁判是真 boot（错开端口）+ 运行实例日志。
+
+**升级后用户报「东西没了」的排查序**：①`ls ~/.dsh/settings.yaml*`（配置文件在不在）②boot 日志 grep disabling/failed（谁被门禁拒）③client pending 名单（谁等旧服务）④设置页 UI 重构导致的展示变化（不是数据丢失）。
