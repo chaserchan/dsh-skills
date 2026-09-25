@@ -1091,3 +1091,29 @@ Set-ItemProperty $p -Name IsReadOnly -Value $false           # 修复
 
 **衍生纪律**：所有"错开端口验证"的 dsh 进程必须显式清理（我在 16:10~22:42 之间留了 5 个僵尸实例，
 每个都持有 profile 句柄，进一步污染了症状）。验证脚本收尾必须 kill，且用 `--port NNNN` 记录以便事后扫。
+
+### 101. 按端口杀进程必须校验进程名：`192.168.31.23:3080` 是 iphlpsvc 的 svchost，不是 dsh
+
+**事故**：2026-09-25 停机窗口脚本按端口 kill 3080/3090，把 `192.168.31.23:3080` 的
+**svchost（iphlpsvc / IP Helper 宿主）** 一起杀了 → **portproxy 停摆** → 公网
+`https://dsh.chaseman.cn` 变成 **frps 404**（"The page you requested was not found. 服务器是由玻璃钢供电"）。
+
+**架构**（见 memory/dsh-frp-remote-chain.md）：
+```
+公网 → frp → 192.168.31.23:3080 (portproxy，iphlpsvc 持有) → 127.0.0.1:3090 (auth-proxy) → 127.0.0.1:3080 (dsh)
+```
+`127.0.0.1:3080` 是 dsh（node），`192.168.31.23:3080` 是 **iphlpsvc 的 svchost** —— **同端口号、两个宿主**。
+
+**铁律**：按端口杀进程前**先校验进程名**：
+```powershell
+$procName = (Get-Process -Id $procId -ErrorAction SilentlyContinue).ProcessName
+if ($procName -ne 'node') { continue }   # 只杀 node，别碰系统服务
+```
+
+**恢复**：`Start-Service iphlpsvc`（管理员）→ portproxy 规则**自动生效**（netsh 规则本身持久化，不会丢）。
+**验收三点**（全 303 才算通）：
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3090/
+curl -s -o /dev/null -w "%{http_code}\n" http://192.168.31.23:3080/
+curl -s -o /dev/null -w "%{http_code}\n" https://dsh.chaseman.cn/
+```
