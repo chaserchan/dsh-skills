@@ -982,3 +982,17 @@ sp[method] = async (...args) => {
 - 「卸载后 sp[method] 调用结果仍包含 this.x」——bind 还原后 this 仍正确
 **真机验证（必做）**：smoke 通过不等于 dsh 启动成功。跑 `DSH_USER_SYSTEM_PORT=<unused> dsh --profile web --no-open > out.log 2>&1`（错开端口不碰运行实例），看日志 `[perf-boost] listArtifacts 冷扫 #1 耗时=Nms` 真出现 + 无 `tracker` / `Cannot read` 错。`grep -E "perf-boost" out.log` 一行必须有，否则视为未生效。
 **教训**：hook 类插件「在 mock 里跑通 ≠ 在 dsh 里跑通」，因为 mock 多用箭头函数不依赖 this；真 dsh 的 Service 实例方法 100% 依赖 this。两步验证缺一不可。
+
+### 96. dsh 0.1.7 client settings 体系重构：settingsScope 移除 + ctx 严格 proxy
+
+**背景**：0.1.7 把 client settings 体系整体重构——旧 `settingsScope` 服务**字符串级消失**（宿主全量 grep 零命中），新架构是 **ConfigForms**（`ConfigFormController / SettingsSchemaService`，插件声明 config schema → 设置页自动生成表单，见 `dsh-client-ui-settings/lib/types/client/`）。同版本 host 侧 `settings.register` 也被移除（只剩 `settings.configure`）。
+
+**两个连环坑（都会把插件打成 failed）**：
+1. client 插件 `inject: ["settingsScope"]` 请求已移除的服务 → 永远 pending。**止血**：摘除 inject 声明（media-capture 声明了但零使用，摘除零损失）。
+2. 降级代码里 `if (!ctx.settingsScope)` —— **cordis client ctx 是严格 proxy，读未 inject 声明的属性直接抛错**（media-capture 旧注释早写过「否则 ctx.sessions 会抛 without inject」）→ 整个插件 failed，比 pending 更糟。**止血**：降级分支绝不触碰 ctx 的任何未声明属性，直接 warn + return。
+
+**新架构迁移方向（task #35）**：读 `dsh-client-ui-settings` 的 ConfigForms/SettingsSchemaService 契约，把「设置行」改成 config schema 声明式。迁移完成前，key 类配置走环境变量兜底（host 侧 execute 时实时读，热生效）。
+
+**诊断技巧**：报错「公网好本地坏」先想到**两个 origin 浏览器缓存独立**（dsh.chaseman.cn vs 127.0.0.1 各存一份 bundle）——同一实例两份不同版本的 client。client 插件 failed 的详情只在浏览器 console，宿主 dsh-web.log 不记 client loader 错误。
+
+**冒烟防复发断言**：mock 降级路径用**完全空的 ctx（{}）**调 apply——任何对 ctx 属性的访问都会暴露；legacy 实现单独导出（applyLegacySettingsScope）单独测，ConfigForms 重写时是参考。
