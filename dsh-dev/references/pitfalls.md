@@ -1063,3 +1063,31 @@ Windows rename 会被瞬时限流，内置 8 次重试（20ms 起指数退避）
 `--max-old-space-size` **不能按"V8 松弛"砍**：设 3072 会 17.5 秒 OOM 崩（`Reached heap limit`）；
 16384 则放任膨胀到 16.7GB 崩。**8GB 是实测合理值**。两条启动路径（手工 ps1 / watchdog）参数必须一致，
 否则排查时会被"同一个 dsh 两种行为"绕晕。
+
+### 100. Windows EPERM 排查铁律：属性 → ACL → 句柄（我三次误判的血泪）
+
+**症状**：`EPERM: operation not permitted, open 'profiles/web/package.json'` ——
+**读得了**（readFileSync ✓）**写不了**（writeFileSync ✗）。表现：dsh 设置页「启用插件」失败、
+`dsh plugin add` 失败、node 改 json 失败、stopband 脚本失败。
+
+**我的三次误判（每次都是"猜"不是"验"）**：
+1. 先怪「运行中的 dsh 实例锁」→ 停掉 dsh 仍 EPERM
+2. 再怪「自己留下的僵尸验证进程」→ 杀光 5 个仍 EPERM
+3. 才想到查属性 → **`Attributes: ReadOnly` / `IsReadOnly: True`** ✓✓✓ 一行命令命中
+
+**铁律**：Windows EPERM 的排查顺序 **属性 → ACL → 句柄**（属性一行就能查、最易忘、也最常见）：
+
+```powershell
+Get-Item $p | Select-Object Attributes, IsReadOnly          # 第一步永远是它
+Get-ChildItem $dir -File | Where-Object { $_.IsReadOnly }    # 全目录扫一遍
+Set-ItemProperty $p -Name IsReadOnly -Value $false           # 修复
+```
+
+本机实测：`profiles/web/package.json` + `package.json.bak-bundles` 被设了只读
+（时间戳 2026-09-18 22:15:25 = dsh 0.1.5 大升级当天），导致此后**所有**插件安装/启用/配置写入全部 EPERM，
+误导排查方向 3 次、浪费数小时。
+
+**教训**：诊断"写不进去"时不要从「谁锁了它」开始 —— **先问「它自己是否可写」**。
+
+**衍生纪律**：所有"错开端口验证"的 dsh 进程必须显式清理（我在 16:10~22:42 之间留了 5 个僵尸实例，
+每个都持有 profile 句柄，进一步污染了症状）。验证脚本收尾必须 kill，且用 `--port NNNN` 记录以便事后扫。
