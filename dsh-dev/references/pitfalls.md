@@ -1159,22 +1159,46 @@ done
 
 **症状**：多工作区长跑后，`list`/`listArtifacts` 冷扫飙到 **7.7~8.1 秒**；「新会话载入历史也慢」（与会话大小无关的固定开销）。
 
-**根因（实测）**：dsh 的「归档会话」**只把 id 从 `$DSH_HOME/storages/workspace.json` 的
-`tables.workspaces[*].sessionIds` 里划掉**（界面消失）——**文件一个字节没动**。
+**根因（实测）**：dsh 的「归档会话」**只改注册表，文件一个字节没动**。
 于是 `findLog` / `listArtifacts` / `list` 每次照扫。本机实测：
 **1697 个会话里 1529 个（90%）是归档/幽灵**；另有 **73 个空工作区目录**（OpenDesign 临时项目等）。
 `findLog` 的成本 = 遍历工作区目录数 × 每个目录的会话目录数。
 
+> ⚠️ **归档字段随 dsh 版本变过 —— 两代都要认（v0.10.0 踩过）**
+>
+> | 版本 | 归档写到哪 | 判定 |
+> |---|---|---|
+> | dsh ≤0.1.5 | 把 id 从 `tables.workspaces[*].sessionIds` **划掉** | 掉出注册集 = 已归档 |
+> | dsh ≥0.1.7 | 进 `global.archivedSessionIds`（**注册表全局集合**），**`sessionIds` 槽位保留** | 查归档集，不能查 sessionIds |
+>
+> 0.1.7 保留槽位是为了「取消归档」能还原列表位置（`dsh-workspace` 里
+> `archivedSessionIds` 的注释写明了）。**只读 sessionIds 会漏掉全部新归档**——
+> 本机实测 `sessions/` 里有 **83 个会话 / 456MB** 属于归档集却始终没被搬走。
+> **正确判定 = 「在归档集里」∪「掉出注册集」**（后者兜 0.1.5 遗留幽灵）。
+
+> ⚠️ **dsh 禁止归档「活动会话」**：`archiveSession` 先问 `workspace/session-activity`
+> waterfall，有任何活动就抛 `WorkspaceActiveSessionError`（`cannot archive session 'X':
+> the session is active (...)`）。**UI 上表现为点了没反应**。
+> 想让会话可归档 → 先等它的任务跑完（侧栏不再显示「进行中」）。
+> 附：`archiveSession(id, {stopActivity:true})` 可跳过检查并停掉任务，但 UI 默认不这么调。
+
+> ⚠️ **UI 有「取消归档」一级入口**（右键菜单 + hover 按钮 + 文案
+> `toast.archivedNotOpenable`「已归档对话暂时无法查看，请取消归档后查看」）。
+> 所以**搬走归档会话的文件前，必须先 hook `workspaceRegistry.unarchiveSession`
+> 做反向 rename 还原** —— 否则取消归档后会话「看得见、打不开」。
+> 钩子没装上时：只过滤（省内存）不搬迁（不省磁盘）。
+
 **对账口径（关键）**：
-- 「界面认的会话」= `workspace.json` 的 sessionIds 并集（本机 168 个 / 10 个真实工作区）
+- 「界面认的会话」= `workspace.json` 的 **sessionIds 并集 − 归档集**（本机 168 注册 / 452 归档）
 - 「磁盘会话」= `sessions/*/*/` 目录数（本机 1697 个）
 - **目录名 == 会话 ID**（`encodeSegment` 对 `session-<uuid>` / `import-<uuid>` 是恒等，实测 168/168 命中）→ 可直接用 Set 比对
 
-**治理方案（perf-boost v0.7.0 已内置）**：
-1. **扫描过滤**：hook `listSessionDirs`，过滤掉「不在注册集」的目录 → 上层 `findLog`/`list` 自动受益
-2. **自动搬迁**：启动 30s 后 + 每 10 分钟，把未注册会话目录 rename 到 `sessions-archive/`（**移动非删除** + `_auto-sweep-*.json` manifest 可恢复）
+**治理方案（perf-boost v0.7.0 起内置，v0.10.0 对齐 0.1.7）**：
+1. **扫描过滤**：hook `listSessionDirs`，过滤掉「归档集命中 / 掉出注册集」的目录 → 上层 `findLog`/`list` 自动受益
+2. **自动搬迁**：启动 30s 后 + 每 10 分钟，把归档/幽灵会话目录 rename 到 `sessions-archive/`（**移动非删除** + `_auto-sweep-*.json` manifest 可恢复）
 3. **fail-open 铁律**：`workspace.json` 读不到时**绝不过滤、绝不搬迁**（插件故障不能变成"会话消失"）
-4. **配置开关**：`archiveFilter` / `archiveSweep`（默认开）、`archiveIntervalMs`、`dshHome`
+4. **反向钩子闸门**（v0.10.0）：hook `workspaceRegistry.unarchiveSession` 做还原 rename；**没装上就只过滤不搬迁**（见上）
+5. **配置开关**：`archiveFilter` / `archiveSweep`（默认开）、`archiveIntervalMs`、`archiveBootDelayMs`（设 0 便于测试）、`dshHome`
 
 **实测效果（本机）**：会话 1697→168、目录 83→10、体积 6.4G→3.5G；
 冷扫 **7719/8146ms → 463~844ms（降 90%）**。
