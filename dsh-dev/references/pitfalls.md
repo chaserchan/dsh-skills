@@ -1263,3 +1263,51 @@ dsh 的 `resolveGenerationInDirectory` **只取最新代**读取 → 旧代与�
 **解析文件名的坑（v0.9.1 修复）**：备份文件名为 `session.jsonl.zstd.bak-fullfix`，
 **不以 `.zstd` 结尾** —— 若解析函数先判 `.zstd` 后缀，会把备份当"非会话文件"跳过（初版漏 98MB）。
 **正确顺序：先判 `.bak`，再判后缀。** 防复发：用真实文件名（含 `.bak-*`）做断言。
+
+### 105. `dsh plugin add` 报 `atomic-write: timed out waiting for the writer lock`：PID 复用把陈旧锁变成永久死锁
+
+**症状**：`dsh plugin --profile web add link:...` 失败：
+
+```
+Error: atomic-write: timed out waiting for the writer lock at
+  <profile>/package.json.lock
+    at withFileLock (dsh-atomic-write/lib/index.js:206)
+```
+
+**误判方向**：以为是"运行中的 dsh 正在写 profile，等一下就好"。等多久都没用。
+
+**真根因（实测）**：锁文件是**两天前的陈旧锁**，但 dsh 的判活逻辑被 **Windows PID 复用**打败：
+
+```
+锁文件内容            : 5668            （写于 2026-09-25 23:22）
+两天后 PID 5668 是谁  : wlanext.exe     （Windows WLAN 服务，启动于 09-27 02:15）
+```
+
+`dsh-atomic-write/lib/index.js:90-97` 的判活就一句：
+
+```js
+/** Whether the holder a `<pid>\n` record names is proven gone: a signal probe finds no such process. */
+const pid = Number(record.trim());
+if (pid === process.pid) return false;
+try { process.kill(pid, 0); ... }   // ← 只要这个 PID 存在就认为持有人还活着
+```
+
+Windows 会把 PID 复用给**任何**新进程 → `process.kill(pid, 0)` 成功 → dsh 认为持有人健在 →
+无限退避重试直到 deadline 超时。**锁再也不会自动回收。**
+
+**正确处置**：
+1. 先确认是陈旧锁，别急着删：`stat -c '%y' <profile>/package.json.lock` 看锁龄；
+   `cat` 出里面的 PID，再用 `Get-CimInstance Win32_Process -Filter 'ProcessId=<pid>'`
+   看那个 PID 现在是什么进程 —— **若 CreationDate 晚于锁的写入时间，就是 PID 复用，锁已废弃**。
+2. 备份 profile：`cp package.json <临时目录>/package.json.bak-$(date +%Y%m%d-%H%M%S)`
+3. 删锁：`rm -f <profile>/package.json.lock`，重试 `dsh plugin add`。
+4. 装完**必须验证**：`dsh --profile <p> --dump-config` exit=0、条目入树、
+   `MODULE_NOT_FOUND|did not activate|duplicate|SlotAssembly|Cannot find` 零命中，
+   并逐个确认 `node_modules/<dep>` 都能解析（`Packages: -N` 只是 pnpm 清 extraneous，别慌，
+   但要核实声明的依赖一个没少）。
+
+**给 dsh 的改进建议**：`isHolderGone` 应同时比对锁文件的 mtime 与持有人进程的 CreationDate，
+或写锁时把 `pid + boot-time/start-time` 一起落盘 —— 单靠 PID 在 Windows 上不可靠。
+
+**同源提醒**：这跟本文件 #100（Windows EPERM 排查铁律）是同一类问题 ——
+**Windows 上"进程级"的判活/占用手感都不可靠，必须落到"属性/时间戳"这类客观证据上**。
