@@ -1176,6 +1176,36 @@ done
 > 本机实测 `sessions/` 里有 **83 个会话 / 456MB** 属于归档集却始终没被搬走。
 > **正确判定 = 「在归档集里」∪「掉出注册集」**（后者兜 0.1.5 遗留幽灵）。
 
+> ⚠️ **子 agent 会话按谱系判定，不能按注册集判定（v0.10.1 踩的，误搬 513 个）**
+>
+> dsh 的子 agent 会话：`header.origin === "subagent"` + `header.parentSession`，
+> id 是**裸 uuid**（无 `session-` 前缀），且**永远不进 `sessionIds`** —— 子 agent 不被独立
+> 归档。`dsh-api-session-controller/lib/types/archived-session-gate.js` 写明：
+> 「an archived Session, **or a subagent descendant of one**, must not run a model step
+> until it is restored」「Lineage follows the durable header fields through
+> subagent-origin Sessions only」—— 归档只作用于**谱系根**，取消归档解除整条 lineage。
+>
+> 所以「不在注册集」对子 agent **恒成立**。用它当搬迁判定 → 父会话还活着时子 agent
+> 记录就被搬走 → **点开父会话看不到子 agent**（本机实测 **1223** 个子 agent 目录被搬，
+> 其中 **513** 个的父仍活跃）。而且每 10 分钟定时器持续制造新误搬。
+>
+> **正确判定 = 读 header 认谱系，跟随谱系根**：
+> 根已归档 → 跟着搬；**根活跃 → 留**；根是幽灵 → 搬；header 读不出 → **留**（保守）；
+> 子 agent **自身在归档集里** → 留（dsh 明确归档过它 —— 本机有 20 个这种）。
+>
+> **读 header 的正确姿势**（无需 zstd 依赖）：Node ≥22.15/23.8 内置 zstd ——
+> `createReadStream(f).pipe(createZstdDecompress())` 只取第一帧（`total >= 4096` 就 break），
+> **~4ms/个**，不解整个文件（会话文件动辄几十 MB，全解会炸）。
+> 文件名要先按「最高 `session.v<N>.jsonl.zstd`」选当前代（`.bak-*` 不以 `.zstd` 结尾）。
+>
+> **判定后要双向对账**：出方向搬走该走的 + 入方向把「根活跃」的子 agent 搬回来 ——
+> 这样历史误搬会自愈，不需要一次性修复脚本。只做单向就只能永远修不完历史数据。
+>
+> **验证要用真实数据 + junction 镜像**：在临时 home 里给真实会话目录建目录 junction
+> （`fs.symlinkSync(target, link, 'junction')`），插件 rename 只动 junction，**真实数据零风险**，
+> 却能拿到「moved=N / restored=M」的真实数字；再**逐条独立复核**（用独立实现重算谱系根，
+> 不看插件结论）。第一轮复核就抓出 20 条误还原（自身在归档集里的子 agent 被错误搬回）。
+
 > ⚠️ **dsh 禁止归档「活动会话」**：`archiveSession` 先问 `workspace/session-activity`
 > waterfall，有任何活动就抛 `WorkspaceActiveSessionError`（`cannot archive session 'X':
 > the session is active (...)`）。**UI 上表现为点了没反应**。
