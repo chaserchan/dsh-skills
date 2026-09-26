@@ -1184,3 +1184,28 @@ done
 
 **用户侧认知**：「归档」不等于「不占扫描成本」；要真正免疫，就得**把文件移出 sessions/**
 （这也是 dsh 设计里 `sessions-archive/` 目录存在但从不写入的原因）。
+
+### 104. 单会话目录的隐藏膨胀：陈旧 generation + 迁移备份（实测占 75%）
+
+**症状**：单会话「体积过大」——`session-e0f4bd92` 目录实测 **292MB**，但其中**只有 72MB 是当前代**。
+
+**构成（实测）**：
+```
+ 30.6MB  session.jsonl.zstd              ← v0/v1 陈旧代
+ 67.8MB  session.jsonl.zstd.bak-fullfix  ← 迁移备份
+ 30.6MB  session.jsonl.zstd.bak-v3src    ← 迁移备份
+ 89.8MB  session.v3.jsonl.zstd           ← v3 陈旧代
+ 72.4MB  session.v4.jsonl.zstd           ← ★ 唯一在用的当前代
+```
+dsh 的 `resolveGenerationInDirectory` **只取最新代**读取 → 旧代与备份是纯历史包袱。
+
+**另一层认知**：dsh 的 `compact`（压缩上下文）**不减小会话文件**（append-only）——
+压缩只是换「喂给模型的上下文视图」，历史一条不删。用户以为"压缩能瘦身"是常见误解。
+
+**治理（perf-boost v0.9.x 已内置）**：每会话目录**只保留版本号最高的文件**，其余移入
+`sessions-archive/_stale-generations/`（移动非删除 + manifest + 开关 `generationSweep`）。
+实测回收 **1990MB / 218 个文件**，`sessions/` 从 **2.7G → 765M**。
+
+**解析文件名的坑（v0.9.1 修复）**：备份文件名为 `session.jsonl.zstd.bak-fullfix`，
+**不以 `.zstd` 结尾** —— 若解析函数先判 `.zstd` 后缀，会把备份当"非会话文件"跳过（初版漏 98MB）。
+**正确顺序：先判 `.bak`，再判后缀。** 防复发：用真实文件名（含 `.bak-*`）做断言。
