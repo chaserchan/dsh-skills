@@ -1154,3 +1154,33 @@ for f in $(find ~/.dsh/sessions -name "*.zstd"); do
   [ "$n" != "0" ] && echo "HIT($n) $(basename $(dirname $f))"
 done
 ```
+
+### 103. dsh 的「归档」不搬文件 —— 且会被每次扫描照单全收（附治理方案）
+
+**症状**：多工作区长跑后，`list`/`listArtifacts` 冷扫飙到 **7.7~8.1 秒**；「新会话载入历史也慢」（与会话大小无关的固定开销）。
+
+**根因（实测）**：dsh 的「归档会话」**只把 id 从 `$DSH_HOME/storages/workspace.json` 的
+`tables.workspaces[*].sessionIds` 里划掉**（界面消失）——**文件一个字节没动**。
+于是 `findLog` / `listArtifacts` / `list` 每次照扫。本机实测：
+**1697 个会话里 1529 个（90%）是归档/幽灵**；另有 **73 个空工作区目录**（OpenDesign 临时项目等）。
+`findLog` 的成本 = 遍历工作区目录数 × 每个目录的会话目录数。
+
+**对账口径（关键）**：
+- 「界面认的会话」= `workspace.json` 的 sessionIds 并集（本机 168 个 / 10 个真实工作区）
+- 「磁盘会话」= `sessions/*/*/` 目录数（本机 1697 个）
+- **目录名 == 会话 ID**（`encodeSegment` 对 `session-<uuid>` / `import-<uuid>` 是恒等，实测 168/168 命中）→ 可直接用 Set 比对
+
+**治理方案（perf-boost v0.7.0 已内置）**：
+1. **扫描过滤**：hook `listSessionDirs`，过滤掉「不在注册集」的目录 → 上层 `findLog`/`list` 自动受益
+2. **自动搬迁**：启动 30s 后 + 每 10 分钟，把未注册会话目录 rename 到 `sessions-archive/`（**移动非删除** + `_auto-sweep-*.json` manifest 可恢复）
+3. **fail-open 铁律**：`workspace.json` 读不到时**绝不过滤、绝不搬迁**（插件故障不能变成"会话消失"）
+4. **配置开关**：`archiveFilter` / `archiveSweep`（默认开）、`archiveIntervalMs`、`dshHome`
+
+**实测效果（本机）**：会话 1697→168、目录 83→10、体积 6.4G→3.5G；
+冷扫 **7719/8146ms → 463~844ms（降 90%）**。
+
+**测试踩出的坑**：注册集缓存必须**按 `dshHome` 隔离**（用 Map 而非单变量）——
+单变量缓存在换 DSH_HOME 时串味，fail-open 用例被旧缓存污染而误判。
+
+**用户侧认知**：「归档」不等于「不占扫描成本」；要真正免疫，就得**把文件移出 sessions/**
+（这也是 dsh 设计里 `sessions-archive/` 目录存在但从不写入的原因）。
